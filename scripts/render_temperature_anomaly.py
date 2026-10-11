@@ -81,11 +81,13 @@ ANCHOR_RGB = [
 CMAP = LinearSegmentedColormap.from_list(
     "popovic", list(zip(ANCHOR_POS, [tuple(c / 255 for c in rgb) for rgb in ANCHOR_RGB]))
 )
-VRANGE = 9.0  # anomalia en +-9 C mapea a los extremos de la paleta
+VRANGE = 5.0  # anomalia en +-5 C mapea a los extremos de la paleta (el mes
+# real ronda -4..+6.5 C; con +-9 los colores quedaban casi todos al centro)
 
 RENDER_PX = 1100
-HEIGHT_SCALE = 3500.0
-HEIGHT_OFFSET = 11.0  # mantiene la altura positiva (rango util ~2..20)
+HEIGHT_OFFSET = 5.0  # desplaza la altura a positivo (minimo observado ~-4.2 C)
+HEIGHT_SCALE_SAFETY = 0.92  # margen bajo el limite duro del motor (clamp +-65536)
+SHADE_LOW, SHADE_HIGH = 0.55, 1.70  # contraste de sombreado exagerado para notar el cambio dia a dia
 NEUTRAL_GRAY = 235
 PANEL_W = 430
 CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
@@ -134,11 +136,11 @@ def _upsample_day(day: np.ndarray, mask_valid: np.ndarray) -> tuple[np.ndarray, 
     return day_up, mask_up
 
 
-def _render_shade(day_up: np.ndarray, mask_up: np.ndarray, tmp_path: Path) -> np.ndarray:
+def _render_shade(day_up: np.ndarray, mask_up: np.ndarray, height_scale: float, tmp_path: Path) -> np.ndarray:
     """Relieve 3D (altura = anomalia) renderizado con el motor nativo de forge3d."""
     height_src = np.where(mask_up, day_up + HEIGHT_OFFSET, 0.0).astype(np.float32)
     neutral_style = f3d.RasterHeightSurfaceStyle(
-        HEIGHT_SCALE, "C",
+        height_scale, "C",
         low_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
         high_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
     )
@@ -154,10 +156,10 @@ def _render_shade(day_up: np.ndarray, mask_up: np.ndarray, tmp_path: Path) -> np
     return np.asarray(Image.open(tmp_path).convert("L"), dtype=np.float32)
 
 
-def _render_map_rgba(day: np.ndarray, tmp_path: Path) -> Image.Image:
+def _render_map_rgba(day: np.ndarray, height_scale: float, tmp_path: Path) -> Image.Image:
     mask_valid = ~np.isnan(day)
     day_up, mask_up = _upsample_day(day, mask_valid)
-    shade = _render_shade(day_up, mask_up, tmp_path)
+    shade = _render_shade(day_up, mask_up, height_scale, tmp_path)
 
     norm = np.clip((day_up + VRANGE) / (2 * VRANGE), 0.0, 1.0)
     color = (CMAP(norm)[..., :3] * 255).astype(np.uint8)
@@ -166,7 +168,7 @@ def _render_map_rgba(day: np.ndarray, tmp_path: Path) -> Image.Image:
     color_img = np.asarray(Image.fromarray(color).resize((RENDER_PX, RENDER_PX), Image.BICUBIC))
     alpha_img = np.asarray(Image.fromarray(alpha).resize((RENDER_PX, RENDER_PX), Image.BILINEAR))
 
-    shade_norm = np.clip(shade / NEUTRAL_GRAY, 0.78, 1.25)
+    shade_norm = np.clip(shade / NEUTRAL_GRAY, SHADE_LOW, SHADE_HIGH)
     blended = np.clip(color_img.astype(np.float32) * shade_norm[..., None], 0, 255).astype(np.uint8)
 
     rgba = np.dstack([blended, alpha_img])
@@ -206,88 +208,104 @@ def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, la
     canvas.paste(map_with_shadow, (PANEL_W, 0))
 
     draw = ImageDraw.Draw(canvas)
-    f_eyebrow = _font("arialbd.ttf", 13)
-    f_title = _font("arial.ttf", 30)
-    f_sub = _font("arial.ttf", 14)
-    f_day = _font("arialbd.ttf", 12)
-    f_date = _font("arial.ttf", 38)
-    f_mean = _font("arial.ttf", 15)
-    f_label = _font("arialbd.ttf", 12)
-    f_note = _font("arial.ttf", 11)
-    f_legend = _font("arial.ttf", 11)
-    f_attr = _font("arial.ttf", 10)
+    f_eyebrow = _font("arialbd.ttf", 18)
+    f_title = _font("arial.ttf", 44)
+    f_sub = _font("arial.ttf", 19)
+    f_day = _font("arialbd.ttf", 17)
+    f_date = _font("arial.ttf", 52)
+    f_mean = _font("arial.ttf", 22)
+    f_label = _font("arialbd.ttf", 16)
+    f_note = _font("arial.ttf", 15)
+    f_legend = _font("arial.ttf", 14)
+    f_attr = _font("arial.ttf", 13)
 
     pad = 38
-    y = 36
+    y = 34
     draw.text((pad, y), f"COLOMBIA / {MESES_ES[month].upper()} {year}", font=f_eyebrow, fill=INK)
-    y += 26
+    y += 32
     draw.text((pad, y), "El calor del mes,", font=f_title, fill=INK)
-    y += 38
+    y += 54
     draw.text((pad, y), "dia a dia", font=f_title, fill=INK)
-    y += 48
+    y += 62
     draw.text((pad, y), "Temperatura media diaria a 2 m menos la normal", font=f_sub, fill=MUTED)
-    y += 18
+    y += 24
     draw.text((pad, y), "1991-2020 para ese dia", font=f_sub, fill=MUTED)
 
-    y += 42
+    y += 40
     the_date = date(year, month, day_idx + 1)
     weekday = DIAS_ES[the_date.weekday()]
     draw.text((pad, y), weekday, font=f_day, fill=FAINT)
-    y += 20
+    y += 26
     draw.text((pad, y), f"{day_idx + 1} de {MESES_ES[month]}", font=f_date, fill=INK)
-    y += 48
+    y += 62
     mean_val = land_means[day_idx]
     draw.text((pad, y), f"media terrestre {mean_val:+.1f} °C", font=f_mean, fill=INK)
 
-    y += 34
+    y += 40
     draw.text((pad, y), "MEDIA DIARIA EN TIERRA", font=f_label, fill=FAINT)
-    y += 20
-    spark_w, spark_h = PANEL_W - 2 * pad, 56
+    y += 24
+    spark_w, spark_h = PANEL_W - 2 * pad, 64
     _draw_sparkline(draw, pad, y, spark_w, spark_h, land_means, day_idx)
-    y += spark_h + 6
+    y += spark_h + 8
     n_days = len(land_means)
     for tick in (0, 7, 14, 21, n_days - 1):
         tx = pad + (tick / (n_days - 1)) * spark_w
-        draw.text((tx - 4, y), str(tick + 1), font=f_legend, fill=FAINT)
-
-    y += 30
-    draw.text((pad, y), "La altura y el color muestran la misma anomalia.", font=f_note, fill=INK)
-    y += 15
-    draw.text((pad, y), "Calido sube; frio se hunde. No es elevacion real.", font=f_note, fill=MUTED)
+        draw.text((tx - 6, y), str(tick + 1), font=f_legend, fill=FAINT)
 
     y += 34
+    draw.text((pad, y), "La altura y el color muestran la misma anomalia.", font=f_note, fill=INK)
+    y += 20
+    draw.text((pad, y), "Calido sube; frio se hunde. No es elevacion real.", font=f_note, fill=MUTED)
+
+    y += 36
     bar_w = PANEL_W - 2 * pad
-    bar_h = 12
+    bar_h = 16
     for i in range(bar_w):
         t = i / (bar_w - 1)
         r, g, b = (int(c * 255) for c in CMAP(t)[:3])
         draw.line([(pad + i, y), (pad + i, y + bar_h)], fill=(r, g, b))
-    y += bar_h + 16
-    for frac, label in ((0.0, "\u2264 -9 °C"), (0.25, "-4.5"), (0.5, "0"), (0.75, "+4.5"), (1.0, "\u2265 +9 °C")):
+    y += bar_h + 20
+    vr_half = VRANGE / 2
+    legend_items = (
+        (0.0, f"≤ -{VRANGE:.0f} °C"), (0.25, f"-{vr_half:.1f}"), (0.5, "0"),
+        (0.75, f"+{vr_half:.1f}"), (1.0, f"≥ +{VRANGE:.0f} °C"),
+    )
+    for frac, label in legend_items:
         tx = pad + frac * bar_w
         anchor = "la" if frac == 0 else ("ra" if frac == 1 else "ma")
         draw.text((tx, y), label, font=f_legend, fill=FAINT, anchor=anchor)
 
-    attr_y = CANVAS_H - 118
+    attr_y = CANVAS_H - 150
     draw.text((pad, attr_y), "ERA5-Land, medias diarias · Copernicus / ECMWF", font=f_attr, fill=FAINT)
-    draw.text((pad, attr_y + 14), "Normal: medias mensuales 1991-2020, por dia", font=f_attr, fill=FAINT)
-    draw.text((pad, attr_y + 28), "Natural Earth · forge3d-colombia, render 3D GPU", font=f_attr, fill=FAINT)
-    draw.text((pad, attr_y + 42), "Inspirado en 'A warmer shape of summer' de Milos Popovic", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 18), "Normal: medias mensuales 1991-2020, por dia", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 36), "Natural Earth · forge3d-colombia, render 3D GPU", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 54), "Inspirado en 'A warmer shape of summer' de Milos Popovic", font=f_attr, fill=FAINT)
 
-    f_sig = _font("arialbd.ttf", 13)
-    f_sig_link = _font("arial.ttf", 12)
-    draw.text((pad, attr_y + 68), SIGNATURE_NAME, font=f_sig, fill=INK)
-    draw.text((pad, attr_y + 86), SIGNATURE_LINKEDIN, font=f_sig_link, fill=MUTED)
+    f_sig = _font("arialbd.ttf", 18)
+    f_sig_link = _font("arial.ttf", 16)
+    draw.text((pad, attr_y + 86), SIGNATURE_NAME, font=f_sig, fill=INK)
+    draw.text((pad, attr_y + 108), SIGNATURE_LINKEDIN, font=f_sig_link, fill=MUTED)
 
     return canvas
 
 
+def _safe_height_scale(stack: np.ndarray) -> float:
+    """Mayor escala de altura que no exceda el clamp duro (+-65536) del motor,
+    dado el rango de anomalia real de este mes (mas exageracion = mas facil
+    notar el cambio dia a dia)."""
+    max_abs = float(np.nanmax(np.abs(stack)))
+    max_height_src = max_abs + HEIGHT_OFFSET
+    return HEIGHT_SCALE_SAFETY * 65536.0 / max_height_src
+
+
 def render_all_days(stack: np.ndarray) -> tuple[list[Image.Image], list[float]]:
+    height_scale = _safe_height_scale(stack)
+    print(f"[info] height_scale calibrado a {height_scale:.0f} para este mes")
     tmp_path = OUT_DIR / "_tmp_shade.png"
     maps, land_means = [], []
     for i in range(stack.shape[0]):
         day = stack[i]
-        maps.append(_render_map_rgba(day, tmp_path))
+        maps.append(_render_map_rgba(day, height_scale, tmp_path))
         land_means.append(float(np.nanmean(day)))
         print(f"[render] dia {i + 1:02d}/{stack.shape[0]} listo")
     tmp_path.unlink(missing_ok=True)
