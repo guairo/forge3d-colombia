@@ -52,6 +52,7 @@ import rasterio
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from rasterio.mask import mask as rio_mask
+from scipy.ndimage import zoom as ndi_zoom
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ERA5_DIR = REPO_ROOT / "assets" / "era5"
@@ -88,6 +89,11 @@ HEIGHT_OFFSET = 11.0  # mantiene la altura positiva (rango util ~2..20)
 NEUTRAL_GRAY = 235
 PANEL_W = 430
 CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
+UPSAMPLE_FACTOR = 3  # suaviza la rejilla nativa de ERA5-Land (169x123) antes de renderizar
+
+# Firma del autor en el panel (pendiente: nombre y LinkedIn reales del usuario)
+SIGNATURE_NAME = "TU NOMBRE AQUI"
+SIGNATURE_LINKEDIN = "linkedin.com/in/tu-usuario"
 
 
 def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
@@ -117,9 +123,21 @@ def _load_masked_stack(tif_path: Path, boundary: gpd.GeoDataFrame) -> np.ndarray
         return np.stack(frames, axis=0)
 
 
-def _render_shade(day: np.ndarray, mask_valid: np.ndarray, tmp_path: Path) -> np.ndarray:
+def _upsample_day(day: np.ndarray, mask_valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Suaviza la rejilla nativa de ERA5-Land con un upsample bicubico.
+
+    Evita el aspecto "en terrazas" tanto del relieve como del color al
+    escalar una rejilla de ~170x120 celdas hasta RENDER_PX.
+    """
+    filled = np.where(mask_valid, day, 0.0)
+    day_up = ndi_zoom(filled, UPSAMPLE_FACTOR, order=3)
+    mask_up = ndi_zoom(mask_valid.astype(np.float32), UPSAMPLE_FACTOR, order=1) > 0.5
+    return day_up, mask_up
+
+
+def _render_shade(day_up: np.ndarray, mask_up: np.ndarray, tmp_path: Path) -> np.ndarray:
     """Relieve 3D (altura = anomalia) renderizado con el motor nativo de forge3d."""
-    height_src = np.where(mask_valid, day + HEIGHT_OFFSET, 0.0).astype(np.float32)
+    height_src = np.where(mask_up, day_up + HEIGHT_OFFSET, 0.0).astype(np.float32)
     neutral_style = f3d.RasterHeightSurfaceStyle(
         HEIGHT_SCALE, "C",
         low_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
@@ -139,14 +157,15 @@ def _render_shade(day: np.ndarray, mask_valid: np.ndarray, tmp_path: Path) -> np
 
 def _render_map_rgba(day: np.ndarray, tmp_path: Path) -> Image.Image:
     mask_valid = ~np.isnan(day)
-    shade = _render_shade(day, mask_valid, tmp_path)
+    day_up, mask_up = _upsample_day(day, mask_valid)
+    shade = _render_shade(day_up, mask_up, tmp_path)
 
-    norm = np.clip((day + VRANGE) / (2 * VRANGE), 0.0, 1.0)
+    norm = np.clip((day_up + VRANGE) / (2 * VRANGE), 0.0, 1.0)
     color = (CMAP(norm)[..., :3] * 255).astype(np.uint8)
-    alpha = np.where(mask_valid, 255, 0).astype(np.uint8)
+    alpha = np.where(mask_up, 255, 0).astype(np.uint8)
 
-    color_img = np.asarray(Image.fromarray(color).resize((RENDER_PX, RENDER_PX), Image.NEAREST))
-    alpha_img = np.asarray(Image.fromarray(alpha).resize((RENDER_PX, RENDER_PX), Image.NEAREST))
+    color_img = np.asarray(Image.fromarray(color).resize((RENDER_PX, RENDER_PX), Image.BICUBIC))
+    alpha_img = np.asarray(Image.fromarray(alpha).resize((RENDER_PX, RENDER_PX), Image.BILINEAR))
 
     shade_norm = np.clip(shade / NEUTRAL_GRAY, 0.78, 1.25)
     blended = np.clip(color_img.astype(np.float32) * shade_norm[..., None], 0, 255).astype(np.uint8)
@@ -250,11 +269,16 @@ def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, la
         anchor = "la" if frac == 0 else ("ra" if frac == 1 else "ma")
         draw.text((tx, y), label, font=f_legend, fill=FAINT, anchor=anchor)
 
-    attr_y = CANVAS_H - 86
+    attr_y = CANVAS_H - 118
     draw.text((pad, attr_y), "ERA5-Land, medias diarias · Copernicus / ECMWF", font=f_attr, fill=FAINT)
     draw.text((pad, attr_y + 14), "Normal: medias mensuales 1991-2020, por dia", font=f_attr, fill=FAINT)
     draw.text((pad, attr_y + 28), "Natural Earth · forge3d-colombia, render 3D GPU", font=f_attr, fill=FAINT)
     draw.text((pad, attr_y + 42), "Inspirado en 'A warmer shape of summer' de Milos Popovic", font=f_attr, fill=FAINT)
+
+    f_sig = _font("arialbd.ttf", 13)
+    f_sig_link = _font("arial.ttf", 12)
+    draw.text((pad, attr_y + 68), SIGNATURE_NAME, font=f_sig, fill=INK)
+    draw.text((pad, attr_y + 86), SIGNATURE_LINKEDIN, font=f_sig_link, fill=MUTED)
 
     return canvas
 
@@ -321,8 +345,11 @@ def render_gif(maps: list[Image.Image], land_means: list[float], year: int, mont
 
 def render_video(
     maps: list[Image.Image], land_means: list[float], year: int, month: int,
-    fps: int = 24, steps_per_day: int = 10,
+    fps: int = 24, hold_frames: int = 16, transition_frames: int = 8,
 ) -> Path:
+    """Video con una pausa por dia (para poder leer la tarjeta) seguida de
+    una transicion suave al dia siguiente — ritmo similar al original
+    (~1 s por dia, ~30 s en total para un mes de 30 dias)."""
     import imageio.v2 as imageio
 
     n_days = len(maps)
@@ -335,11 +362,15 @@ def render_video(
     writer = imageio.get_writer(out_path, fps=fps, codec="libx264", quality=8)
     try:
         for day in range(n_days):
-            start, end = cards[day], cards[min(day + 1, n_days - 1)]
-            for s in range(steps_per_day):
-                t = s / steps_per_day
-                blended = np.clip(start * (1 - t) + end * t, 0, 255).astype(np.uint8)
-                writer.append_data(blended)
+            current = cards[day].astype(np.uint8)
+            for _ in range(hold_frames):
+                writer.append_data(current)
+            if day + 1 < n_days:
+                end = cards[day + 1]
+                for s in range(1, transition_frames + 1):
+                    t = s / transition_frames
+                    blended = np.clip(cards[day] * (1 - t) + end * t, 0, 255).astype(np.uint8)
+                    writer.append_data(blended)
         last = cards[-1].astype(np.uint8)
         for _ in range(fps):
             writer.append_data(last)
