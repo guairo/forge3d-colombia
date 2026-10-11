@@ -408,10 +408,10 @@ def render_gif(maps: list[Image.Image], land_means: list[float], year: int, mont
 
 def render_video(
     maps: list[Image.Image], land_means: list[float], year: int, month: int,
-    fps: int = 24, hold_frames: int = 32, transition_frames: int = 16,
+    fps: int = 24, hold_frames: int = 48, transition_frames: int = 24,
 ) -> Path:
     """Video con una pausa por dia (para poder leer la tarjeta) seguida de
-    una transicion suave al dia siguiente (~2 s por dia, ~1 min en total
+    una transicion suave al dia siguiente (~3 s por dia, ~1.5 min en total
     para un mes de 30 dias)."""
     import imageio.v2 as imageio
 
