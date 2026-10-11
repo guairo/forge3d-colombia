@@ -1,5 +1,7 @@
-"""Descarga ERA5 (Copernicus CDS) y calcula anomalia de temperatura diaria
-para Colombia, analoga al post de Milos Popovic sobre Europa en agosto.
+"""Descarga ERA5-Land (Copernicus CDS) y calcula anomalia de temperatura
+diaria para Colombia, analoga al post de Milos Popovic sobre Europa en
+agosto (https://lnkd.in/p/ej6MgpQD) — mismo dataset y resolucion que el
+original ("ERA5-Land daily means", ~9 km, segun su atribucion).
 
 Requiere:
     pip install cdsapi xarray netCDF4 rasterio
@@ -10,8 +12,9 @@ Requiere:
         key: <tu-api-key>
 
     y haber aceptado los terminos de licencia de los datasets:
-        - "ERA5 hourly data on single levels from 1940 to present"
-        - "ERA5 monthly averaged data on single levels from 1940 to present"
+        - "ERA5-Land hourly data from 1950 to present" (usada via el
+          derivado "ERA5-Land daily statistics")
+        - "ERA5-Land monthly averaged data from 1950 to present"
 
 Uso:
     python scripts/fetch_era5_colombia.py              # mes anterior completo
@@ -24,6 +27,8 @@ import sys
 from calendar import monthrange
 from datetime import date
 from pathlib import Path
+
+import zipfile
 
 import cdsapi
 import numpy as np
@@ -53,8 +58,13 @@ def _target_month() -> tuple[int, int]:
 
 
 def fetch_daily_t2m(year: int, month: int) -> Path:
-    """Descarga t2m horario de ERA5 para el mes objetivo sobre Colombia."""
-    out_path = DATA_DIR / f"era5_t2m_hourly_{year:04d}{month:02d}.nc"
+    """Descarga la media diaria de t2m de ERA5-Land (~9 km) para Colombia.
+
+    Usa el producto derivado "daily statistics", que calcula el promedio
+    diario del lado del servidor (evita bajar los 24 pasos horarios por dia
+    y promediarlos localmente).
+    """
+    out_path = DATA_DIR / f"era5land_t2m_daily_{year:04d}{month:02d}.nc"
     if out_path.exists():
         print(f"[skip] ya existe {out_path}")
         return out_path
@@ -62,16 +72,16 @@ def fetch_daily_t2m(year: int, month: int) -> Path:
     n_days = monthrange(year, month)[1]
     client = cdsapi.Client()
     client.retrieve(
-        "reanalysis-era5-single-levels",
+        "derived-era5-land-daily-statistics",
         {
-            "product_type": "reanalysis",
             "variable": "2m_temperature",
             "year": f"{year:04d}",
             "month": f"{month:02d}",
             "day": [f"{d:02d}" for d in range(1, n_days + 1)],
-            "time": [f"{h:02d}:00" for h in range(24)],
+            "daily_statistic": "daily_mean",
+            "time_zone": "utc+00:00",
+            "frequency": "1_hourly",
             "area": COLOMBIA_BBOX,
-            "format": "netcdf",
         },
         str(out_path),
     )
@@ -80,43 +90,66 @@ def fetch_daily_t2m(year: int, month: int) -> Path:
 
 
 def fetch_monthly_climatology(month: int) -> Path:
-    """Descarga t2m mensual promedio para el baseline (1991-2020) del mes dado."""
-    out_path = DATA_DIR / f"era5_t2m_monthly_clim_month{month:02d}.nc"
-    if out_path.exists():
-        print(f"[skip] ya existe {out_path}")
-        return out_path
+    """Descarga t2m mensual promedio de ERA5-Land para el baseline 1991-2020.
 
-    client = cdsapi.Client()
-    client.retrieve(
-        "reanalysis-era5-single-levels-monthly-means",
-        {
-            "product_type": "monthly_averaged_reanalysis",
-            "variable": "2m_temperature",
-            "year": [f"{y:04d}" for y in BASELINE_YEARS],
-            "month": f"{month:02d}",
-            "time": "00:00",
-            "area": COLOMBIA_BBOX,
-            "format": "netcdf",
-        },
-        str(out_path),
-    )
-    print(f"[ok] descargado {out_path}")
-    return out_path
+    El CDS a veces entrega este producto como un .zip (con un .nc adentro)
+    en lugar de un netCDF directo; se detecta y extrae automaticamente.
+    """
+    raw_path = DATA_DIR / f"era5land_t2m_monthly_clim_month{month:02d}_raw.nc"
+    extract_dir = DATA_DIR / f"era5land_t2m_monthly_clim_month{month:02d}_extracted"
+
+    if not raw_path.exists():
+        client = cdsapi.Client()
+        client.retrieve(
+            "reanalysis-era5-land-monthly-means",
+            {
+                "product_type": "monthly_averaged_reanalysis",
+                "variable": "2m_temperature",
+                "year": [f"{y:04d}" for y in BASELINE_YEARS],
+                "month": f"{month:02d}",
+                "time": "00:00",
+                "area": COLOMBIA_BBOX,
+                "format": "netcdf",
+            },
+            str(raw_path),
+        )
+        print(f"[ok] descargado {raw_path}")
+    else:
+        print(f"[skip] ya existe {raw_path}")
+
+    if zipfile.is_zipfile(raw_path):
+        if not extract_dir.exists() or not list(extract_dir.glob("*.nc")):
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(raw_path) as zf:
+                zf.extractall(extract_dir)
+            print(f"[ok] extraido en {extract_dir}")
+        nc_files = sorted(extract_dir.glob("*.nc"))
+        if len(nc_files) != 1:
+            raise RuntimeError(
+                f"Se esperaba un unico .nc en {extract_dir}, se encontraron {len(nc_files)}"
+            )
+        return nc_files[0]
+
+    return raw_path
 
 
-def compute_daily_anomalies(hourly_path: Path, clim_path: Path, year: int, month: int) -> Path:
-    """Calcula anomalia diaria (K) = promedio_diario - climatologia_mensual.
+def compute_daily_anomalies(daily_path: Path, clim_path: Path, year: int, month: int) -> Path:
+    """Calcula anomalia diaria (°C) = media_diaria - climatologia_mensual.
 
     Guarda un GeoTIFF multibanda (una banda por dia) en assets/era5/.
     """
-    ds_hourly = xr.open_dataset(hourly_path)
-    t2m = ds_hourly["t2m"] - 273.15  # K -> C
+    ds_daily = xr.open_dataset(daily_path)
+    var_name = "t2m" if "t2m" in ds_daily else list(ds_daily.data_vars)[0]
+    daily_mean = ds_daily[var_name] - 273.15  # K -> C
 
-    time_dim = "valid_time" if "valid_time" in t2m.dims else "time"
-    daily_mean = t2m.resample({time_dim: "1D"}).mean()
+    time_dim = "valid_time" if "valid_time" in daily_mean.dims else (
+        "time" if "time" in daily_mean.dims else "date"
+    )
 
     ds_clim = xr.open_dataset(clim_path)
-    clim_mean = (ds_clim["t2m"] - 273.15).mean(dim="valid_time" if "valid_time" in ds_clim["t2m"].dims else "time")
+    clim_var = "t2m" if "t2m" in ds_clim else list(ds_clim.data_vars)[0]
+    clim_time_dim = "valid_time" if "valid_time" in ds_clim[clim_var].dims else "time"
+    clim_mean = (ds_clim[clim_var] - 273.15).mean(dim=clim_time_dim)
 
     anomaly = daily_mean - clim_mean
 
@@ -149,16 +182,16 @@ def compute_daily_anomalies(hourly_path: Path, clim_path: Path, year: int, month
             dst.write(data[i], i + 1)
             dst.set_band_description(i + 1, f"day_{i + 1:02d}")
 
-    print(f"[ok] anomalia diaria guardada en {out_path} ({n_days} bandas)")
+    print(f"[ok] anomalia diaria guardada en {out_path} ({n_days} bandas, resolucion ERA5-Land)")
     return out_path
 
 
 def main() -> None:
     year, month = _target_month()
     print(f"Mes objetivo: {year:04d}-{month:02d}")
-    hourly = fetch_daily_t2m(year, month)
+    daily = fetch_daily_t2m(year, month)
     clim = fetch_monthly_climatology(month)
-    compute_daily_anomalies(hourly, clim, year, month)
+    compute_daily_anomalies(daily, clim, year, month)
 
 
 if __name__ == "__main__":

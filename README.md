@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Terreno y cartografia path-traced para Colombia.</strong><br>
-  Motor <a href="https://github.com/milos-agathon/forge3d">forge3d</a> (Rust + WebGPU) sin modificar, datos y ejemplos propios.
+  Fork completo de <a href="https://github.com/milos-agathon/forge3d">forge3d</a> (Rust + WebGPU) sin modificar el motor, con datos y ejemplos propios.
 </p>
 
 <p align="center">
@@ -24,11 +24,24 @@
 
 ---
 
-Este proyecto **no reimplementa el motor de render**: usa el paquete `forge3d`
-tal cual se publica en PyPI y aporta datos geograficos de Colombia, un
-registro de datasets y ejemplos ejecutables, con documentacion en espanol.
+Este proyecto **no modifica el motor de render**: incluye el codigo fuente
+completo de `forge3d` (Rust + bindings Python, compilado localmente con
+maturin) y aporta datos geograficos de Colombia, un registro de datasets y
+ejemplos ejecutables, con documentacion en espanol.
 
 ## Instalacion
+
+Compilar desde el codigo fuente (lo que usa este repo) requiere Rust
+([rustup](https://rustup.rs/)) y, en Windows, el componente C++ de Visual
+Studio Build Tools:
+
+```bash
+pip install maturin
+pip install -e . --no-build-isolation
+pip install -r requirements.txt
+```
+
+También se puede usar el paquete publicado en PyPI en vez de compilar:
 
 ```bash
 pip install forge3d
@@ -69,36 +82,42 @@ print(list_datasets())
 
 ### Anomalia de temperatura diaria — septiembre 2026
 
-Replica del [post de Milos Popovic sobre Europa](https://lnkd.in/p/ej6MgpQD)
-aplicada a Colombia — ese post usa forge3d por debajo (su enlace a "la
-herramienta" apunta al propio repositorio). Un mapa de relieve 3D por cada
-dia del mes con la diferencia de temperatura a 2 m frente al promedio
-climatologico 1991-2020, sobre datos ERA5 reales.
+Inspirado en ["A warmer shape of summer, day by day"](https://lnkd.in/p/ej6MgpQD)
+de Milos Popovic sobre Europa — ese post usa forge3d por debajo (su enlace a
+"la herramienta" apunta al propio repositorio). Un relieve 3D por cada dia
+del mes: la temperatura media diaria a 2 m frente a la normal climatologica
+1991-2020, con datos ERA5-Land (~9 km) reales.
 
-El relieve es la propia anomalia (zonas mas calientes/frias se elevan o
-hunden) renderizado con el motor de iluminacion 3D nativo de forge3d
-(`MapScene` + `TerrainSource`); el color es la paleta divergente exacta de
-`CategoricalRasterStyle.apply(...).rgba`. Se combinan con un blend
-multiplicativo (sombreado × color) porque el tonemap de iluminacion de
-`MapScene` atenua los colores de cualquier overlay tematico — ver
-[`docs/guides/thematic_raster_styles.md`](docs/guides/thematic_raster_styles.md).
+La altura y el color muestran la misma anomalia con signo — calido sube,
+frio se hunde, no es elevacion real del terreno. El relieve se renderiza
+con el motor de iluminacion 3D nativo de forge3d (`MapScene` +
+`TerrainSource`, luz y sombra reales); el color es un colormap continuo
+muestreado directamente de la paleta del video original, combinado con el
+sombreado via blend multiplicativo (el tonemap de iluminacion de
+`MapScene` atenua cualquier color de overlay nativo — ver
+[`docs/guides/thematic_raster_styles.md`](docs/guides/thematic_raster_styles.md)
+— asi que el color final se compone aparte). El panel editorial (titulo,
+fecha, media diaria, mini histograma, leyenda) se compone con Pillow sobre
+fondo blanco con sombra proyectada, igual que el original.
+
+> El efecto de "agujas" muy afiladas del video original probablemente usa
+> columnas discretas por celda en vez de una superficie continua
+> interpolada; esa tecnica no esta expuesta en la API publica de forge3d
+> usada aqui (que ademas limita `height_scale` a ±65536 unidades), asi que
+> este render usa una superficie continua con el mismo concepto de
+> altura+color=anomalia.
 
 <p align="center">
   <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="820">
 </p>
 
 <p align="center">
-  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="340">
+  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="480">
 </p>
 <p align="center">
   <sub>Version con transicion suave dia a dia (mejor calidad, ~13 s, descarga para reproducir):
   <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a></sub>
 </p>
-
-<sub>El titulo, subtitulo y la leyenda se componen con Pillow sobre el render
-3D — la composicion MapPlate (titulos/leyendas/escala integrados
-directamente en el render) es una funcion Pro de forge3d no incluida en el
-core open-source.</sub>
 
 ### Reproducir o generar otro mes
 
@@ -109,20 +128,23 @@ Requiere una GPU compatible con WebGPU (el relieve se renderiza con
 pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg scipy
 
 # 1. Cuenta gratuita + API key en https://cds.climate.copernicus.eu/
-#    y aceptar la licencia de "ERA5 hourly/monthly single levels".
-#    Guardar la key en ~/.cdsapirc (ver cabecera del script).
+#    y aceptar la licencia de "ERA5-Land hourly data" y
+#    "ERA5-Land monthly averaged data". Guardar la key en ~/.cdsapirc
+#    (ver cabecera del script).
 
 python scripts/fetch_era5_colombia.py              # mes anterior completo
 python scripts/fetch_era5_colombia.py 2026 08       # o un mes/anio especifico
 python scripts/render_temperature_anomaly.py 2026 08
 ```
 
-`fetch_era5_colombia.py` descarga t2m horario del mes objetivo y la
-climatologia mensual 1991-2020, calcula la anomalia diaria y la guarda como
-GeoTIFF multibanda en `assets/era5/`. `render_temperature_anomaly.py` recorta
-por el contorno de Colombia ([`assets/geojson/colombia_boundary.geojson`](assets/geojson/colombia_boundary.geojson)),
-clasifica cada dia con `forge3d.CategoricalRasterStyle` y genera el mosaico,
-el GIF y el video en `docs/assets/`.
+`fetch_era5_colombia.py` descarga la media diaria de t2m de ERA5-Land
+(producto derivado "daily statistics", calculado del lado del servidor) y
+la climatologia mensual 1991-2020, calcula la anomalia diaria y la guarda
+como GeoTIFF multibanda en `assets/era5/`. `render_temperature_anomaly.py`
+recorta por el contorno de Colombia
+([`assets/geojson/colombia_boundary.geojson`](assets/geojson/colombia_boundary.geojson)),
+renderiza el relieve de cada dia con `forge3d.MapScene` y compone el
+mosaico, el GIF y el video en `docs/assets/`.
 
 > Si `rasterio` falla con un error de `PROJ`/`EPSG` al escribir el GeoTIFF
 > (tipico cuando hay otra instalacion de PROJ en el sistema, p. ej. PostGIS),
@@ -146,14 +168,17 @@ Marta, Cocuy):
 ## Atribucion y licencia
 
 - Motor de render: [forge3d](https://github.com/milos-agathon/forge3d), (c) 2025-2026
-  Milos Popovic, licenciado Apache-2.0 / MIT. Este fork no modifica ese codigo,
-  solo depende de el via PyPI.
+  Milos Popovic, licenciado Apache-2.0 / MIT. Este fork incluye el codigo
+  fuente completo del motor (compilado localmente con Rust + maturin) sin
+  modificarlo; solo se agregan datasets y scripts propios encima.
 - Datos de elevacion: Copernicus DEM GLO-30, producido con financiamiento de
   la Comision Europea en el marco del Programa Copernicus, provisto por el
   Agencia Espacial Europea (ESA) de acceso abierto y gratuito.
-- Datos de temperatura: ERA5 (Hersbach et al., 2020), generados con el
-  Copernicus Climate Change Service (C3S) del ECMWF. Ni la Comision Europea
-  ni el ECMWF son responsables de ningun uso que se le de a esta informacion.
-- Idea original del mapa de anomalia diaria: [Milos Popovic](https://lnkd.in/p/ej6MgpQD).
+- Datos de temperatura: ERA5-Land (Munoz-Sabater et al., 2021), generados
+  con el Copernicus Climate Change Service (C3S) del ECMWF. Ni la Comision
+  Europea ni el ECMWF son responsables de ningun uso que se le de a esta
+  informacion.
+- Idea y diseño original del mapa de anomalia diaria:
+  [Milos Popovic, "A warmer shape of summer, day by day"](https://lnkd.in/p/ej6MgpQD).
 - Codigo propio de este fork (`forge3d_colombia/`, `examples/`, `scripts/`): MIT, ver
   [`LICENSE`](LICENSE).

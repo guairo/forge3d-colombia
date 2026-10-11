@@ -1,49 +1,57 @@
-"""Renderiza la anomalia diaria de temperatura de Colombia (ERA5) como un
-relieve 3D sombreado con forge3d, al estilo de la galeria del propio motor
-(terreno + color tematico) y del post de Milos Popovic sobre Europa en
-agosto (https://lnkd.in/p/ej6MgpQD) — ese post usa forge3d por debajo (el
-link del post apunta al propio repo de forge3d).
+"""Renderiza la anomalia diaria de temperatura de Colombia (ERA5-Land) como
+un relieve 3D al estilo del video original de Milos Popovic sobre Europa
+(https://lnkd.in/p/ej6MgpQD, "A warmer shape of summer, day by day") — ese
+post usa forge3d por debajo (su enlace a "la herramienta" apunta al propio
+repositorio).
 
-forge3d.MapScene mezcla el color de un RasterOverlay clasificado con el
-tonemap de iluminacion 3D antes de mostrarlo (ver docs/guides/
-thematic_raster_styles.md: "Lighting and tone mapping can change displayed
-RGB"), lo que apaga/ensucia una paleta divergente. Para tener relieve 3D
-real Y colores de paleta fieles, el pipeline:
+Pipeline:
+  1. La propia anomalia (sin suavizar, para conservar el detalle de celda
+     de ERA5-Land ~9 km) maneja un TerrainSource neutro en forge3d.MapScene,
+     que se renderiza SOLO para capturar el sombreado 3D nativo (luz,
+     sombras, textura de relieve). Calido sube, frio se hunde.
+  2. El color es un colormap continuo construido a partir de la paleta
+     exacta muestreada del video original (azul grisaceo -> crema ->
+     naranja -> rojo), aplicado directamente sobre la anomalia (-9 a +9 C).
+  3. Se combinan con un blend multiplicativo suave (sombreado x color).
+  4. Se compone sobre un lienzo blanco con sombra proyectada y un panel
+     lateral editorial (titulo, fecha, media diaria, mini histograma,
+     leyenda, atribucion), igual que el original.
 
-  1. Usa la propia anomalia (suavizada) como altura en un TerrainSource
-     neutro (sin color tematico) y renderiza SOLO el sombreado 3D nativo
-     de forge3d (luz, sombras, textura de relieve).
-  2. Obtiene el color de paleta exacto de forge3d con
-     ``CategoricalRasterStyle.apply(...).rgba`` — "the exact palette
-     reference" segun la documentacion, sin pasar por el motor de luz.
-  3. Combina ambos con un blend multiplicativo (color x sombreado), la
-     tecnica estandar de cartografia para unir hillshade + color tematico.
+forge3d.MapScene mezcla el color de un RasterOverlay clasificado con su
+propio tonemap de iluminacion (ver docs/guides/thematic_raster_styles.md),
+por eso el color final se compone aparte en vez de usar un overlay nativo.
+El motor tambien limita height_scale a +-65536 unidades (RuntimeError de
+`u_shading.clamp0` si se excede) — el efecto de "pelo/agujas" muy afilado
+del video original probablemente usa columnas discretas por celda en vez
+de una superficie continua interpolada; esa tecnica no esta expuesta en la
+API publica de forge3d usada aqui, asi que este render usa una superficie
+continua (menos afilada, mismo concepto de altura+color=anomalia).
 
 Entrada: assets/era5/colombia_t2m_anomaly_<YYYYMM>.tif (una banda por dia,
-generado por scripts/fetch_era5_colombia.py).
+generado por scripts/fetch_era5_colombia.py con datos ERA5-Land).
 
 Salida:
     docs/assets/colombia_temp_anomaly_<YYYYMM>_grid.png   (mosaico del mes)
     docs/assets/colombia_temp_anomaly_<YYYYMM>.gif        (animacion diaria)
     docs/assets/colombia_temp_anomaly_<YYYYMM>.mp4        (video con transicion)
 
-Requiere una GPU compatible con WebGPU (igual que el resto de forge3d).
+Requiere una GPU compatible con WebGPU.
 """
 
 from __future__ import annotations
 
 import sys
+from calendar import monthrange
 from datetime import date
 from pathlib import Path
 
 import forge3d as f3d
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-from PIL import Image, ImageDraw, ImageFont
+from matplotlib.colors import LinearSegmentedColormap
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from rasterio.mask import mask as rio_mask
-from scipy.ndimage import gaussian_filter, zoom
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ERA5_DIR = REPO_ROOT / "assets" / "era5"
@@ -55,20 +63,36 @@ MESES_ES = [
     "", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
     "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ]
+DIAS_ES = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "DOMINGO"]
 
-BG = (11, 11, 15)
-FG = (235, 235, 235)
-MUTED = (160, 160, 165)
 FONT_DIR = Path(r"C:\Windows\Fonts")
-BIN_EDGES = np.linspace(-4.0, 4.0, 15)  # fijo: mismos bins/colores todos los dias
-UPSCALE = 4  # suavizado de la rejilla nativa ERA5 (~0.25 grados)
-RENDER_W, RENDER_H = 900, 1080
+INK = (35, 35, 38)
+MUTED = (120, 120, 126)
+FAINT = (170, 170, 176)
+WHITE = (255, 255, 255)
+
+ANCHOR_POS = [0.0, 0.081, 0.162, 0.243, 0.324, 0.405, 0.486, 0.567, 0.648, 0.729, 0.810, 0.891, 0.972, 1.0]
+ANCHOR_RGB = [
+    (38, 81, 122), (52, 103, 154), (70, 121, 172), (89, 140, 191), (134, 169, 201),
+    (170, 202, 210), (220, 227, 220), (224, 216, 192), (239, 186, 133), (231, 167, 100),
+    (212, 135, 77), (190, 99, 57), (169, 60, 52), (169, 60, 52),
+]
+CMAP = LinearSegmentedColormap.from_list(
+    "popovic", list(zip(ANCHOR_POS, [tuple(c / 255 for c in rgb) for rgb in ANCHOR_RGB]))
+)
+VRANGE = 9.0  # anomalia en +-9 C mapea a los extremos de la paleta
+
+RENDER_PX = 1100
+HEIGHT_SCALE = 3500.0
+HEIGHT_OFFSET = 11.0  # mantiene la altura positiva (rango util ~2..20)
 NEUTRAL_GRAY = 235
+PANEL_W = 430
+CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
 
 
-def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
+def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
     try:
-        return ImageFont.truetype(str(FONT_DIR / path), size)
+        return ImageFont.truetype(str(FONT_DIR / name), size)
     except OSError:
         return ImageFont.load_default()
 
@@ -86,49 +110,18 @@ def _target_month() -> tuple[int, int]:
 def _load_masked_stack(tif_path: Path, boundary: gpd.GeoDataFrame) -> np.ndarray:
     with rasterio.open(tif_path) as src:
         geom = [boundary.geometry.iloc[0].__geo_interface__]
-        n_bands = src.count
         frames = []
-        for b in range(1, n_bands + 1):
+        for b in range(1, src.count + 1):
             data, _ = rio_mask(src, geom, indexes=[b], crop=True, nodata=np.nan, filled=True)
             frames.append(data[0])
         return np.stack(frames, axis=0)
 
 
-def _smooth_upsample(day: np.ndarray) -> np.ndarray:
-    """Suaviza la rejilla nativa ERA5 (gruesa) para un relieve 3D legible."""
-    valid = ~np.isnan(day)
-    filled = np.where(valid, day, 0.0)
-    up_filled = gaussian_filter(zoom(filled, UPSCALE, order=1), sigma=2.0)
-    up_valid = zoom(valid.astype(np.float32), UPSCALE, order=1) > 0.5
-    return np.where(up_valid, up_filled, np.nan)
-
-
-def _build_style() -> f3d.CategoricalRasterStyle:
-    cmap = plt.get_cmap("RdBu_r")
-    n_classes = len(BIN_EDGES) + 1
-    palette = {
-        i + 1: tuple(int(c * 255) for c in cmap(i / (n_classes - 1))[:3]) + (255,)
-        for i in range(n_classes)
-    }
-    labels = {i + 1: f"class_{i + 1}" for i in range(n_classes)}
-    return f3d.CategoricalRasterStyle(palette, labels, nodata=0)
-
-
-def _palette_rgba(day_up: np.ndarray, style: f3d.CategoricalRasterStyle) -> np.ndarray:
-    classed = np.digitize(day_up, BIN_EDGES) + 1
-    classed = np.where(np.isnan(day_up), 0, classed).astype(np.int32)
-    small = style.apply(classed).rgba
-    return np.asarray(
-        Image.fromarray(small, mode="RGBA").resize((RENDER_W, RENDER_H), Image.NEAREST)
-    )
-
-
-def _render_shade(day_up: np.ndarray, tmp_path: Path) -> np.ndarray:
-    """Relieve 3D neutro (solo luz/sombra) con el motor nativo de forge3d."""
-    valid = ~np.isnan(day_up)
-    height_src = np.where(valid, day_up + 5.0, 0.0).astype(np.float32)
+def _render_shade(day: np.ndarray, mask_valid: np.ndarray, tmp_path: Path) -> np.ndarray:
+    """Relieve 3D (altura = anomalia) renderizado con el motor nativo de forge3d."""
+    height_src = np.where(mask_valid, day + HEIGHT_OFFSET, 0.0).astype(np.float32)
     neutral_style = f3d.RasterHeightSurfaceStyle(
-        900.0, "C",
+        HEIGHT_SCALE, "C",
         low_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
         high_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
     )
@@ -136,103 +129,176 @@ def _render_shade(day_up: np.ndarray, tmp_path: Path) -> np.ndarray:
         data=height_src, style=neutral_style, crs="EPSG:4326",
         metadata={"source_id": "anomaly_relief"}, elevation_sampling_available=True,
     )
-    camera = f3d.OrbitCamera(distance=2.5, azimuth_deg=-40, elevation_deg=42, fov_deg=38)
-    output = f3d.OutputSpec(width=RENDER_W, height=RENDER_H, format="png", path=str(tmp_path))
-    lighting = f3d.LightingPreset(name="daylight", sun_direction=(0.4, 0.9, 0.3), intensity=1.6)
+    camera = f3d.OrbitCamera(distance=2.3, azimuth_deg=-25, elevation_deg=46, fov_deg=32)
+    output = f3d.OutputSpec(width=RENDER_PX, height=RENDER_PX, format="png", path=str(tmp_path))
+    lighting = f3d.LightingPreset(name="daylight", sun_direction=(0.3, 0.9, 0.4), intensity=1.6)
     scene = f3d.MapScene(terrain=terrain, layers=(), camera=camera, lighting=lighting, output=output)
     scene.render(str(tmp_path))
     return np.asarray(Image.open(tmp_path).convert("L"), dtype=np.float32)
 
 
-def _compose_day_rgba(
-    day: np.ndarray, style: f3d.CategoricalRasterStyle, tmp_path: Path,
-) -> np.ndarray:
-    """Relieve sombreado (forge3d) x color de paleta (forge3d) = render final."""
-    day_up = _smooth_upsample(day)
-    color = _palette_rgba(day_up, style).astype(np.float32)
-    shade = _render_shade(day_up, tmp_path)
-    shade_norm = np.clip(shade / NEUTRAL_GRAY, 0.45, 1.4)
-    color[..., :3] = np.clip(color[..., :3] * shade_norm[..., None], 0, 255)
-    return color.astype(np.uint8)
+def _render_map_rgba(day: np.ndarray, tmp_path: Path) -> Image.Image:
+    mask_valid = ~np.isnan(day)
+    shade = _render_shade(day, mask_valid, tmp_path)
+
+    norm = np.clip((day + VRANGE) / (2 * VRANGE), 0.0, 1.0)
+    color = (CMAP(norm)[..., :3] * 255).astype(np.uint8)
+    alpha = np.where(mask_valid, 255, 0).astype(np.uint8)
+
+    color_img = np.asarray(Image.fromarray(color).resize((RENDER_PX, RENDER_PX), Image.NEAREST))
+    alpha_img = np.asarray(Image.fromarray(alpha).resize((RENDER_PX, RENDER_PX), Image.NEAREST))
+
+    shade_norm = np.clip(shade / NEUTRAL_GRAY, 0.78, 1.25)
+    blended = np.clip(color_img.astype(np.float32) * shade_norm[..., None], 0, 255).astype(np.uint8)
+
+    rgba = np.dstack([blended, alpha_img])
+    return Image.fromarray(rgba, mode="RGBA")
 
 
-def _compose_card(rgba: np.ndarray, title: str, subtitle: str) -> Image.Image:
-    base = Image.fromarray(rgba, mode="RGBA")
-    pad_top, pad_bottom, pad_x = 110, 130, 40
-    card = Image.new("RGB", (base.width + 2 * pad_x, base.height + pad_top + pad_bottom), BG)
-    card.paste(base, (pad_x, pad_top), base)
-
-    draw = ImageDraw.Draw(card)
-    f_title = _font("arial.ttf", 34)
-    f_sub = _font("arial.ttf", 18)
-    f_legend = _font("arial.ttf", 15)
-
-    draw.text((pad_x, 28), title, font=f_title, fill=FG)
-    draw.text((pad_x, 72), subtitle, font=f_sub, fill=MUTED)
-
-    legend_y = base.height + pad_top + 30
-    legend_x0, legend_x1 = pad_x, card.width - pad_x
-    legend_w = legend_x1 - legend_x0
-    cmap = plt.get_cmap("RdBu_r")
-    for i in range(legend_w):
-        t = i / (legend_w - 1)
-        r, g, b = (int(c * 255) for c in cmap(t)[:3])
-        draw.line([(legend_x0 + i, legend_y), (legend_x0 + i, legend_y + 14)], fill=(r, g, b))
-    for edge in (-4, -2, 0, 2, 4):
-        t = (edge - BIN_EDGES[0]) / (BIN_EDGES[-1] - BIN_EDGES[0])
-        x = legend_x0 + int(t * legend_w)
-        draw.line([(x, legend_y), (x, legend_y + 18)], fill=MUTED)
-        draw.text((x - 8, legend_y + 20), f"{edge:+d}", font=f_legend, fill=MUTED)
-    draw.text(
-        (legend_x0, legend_y + 42), "Anomalia de temperatura (°C)",
-        font=f_legend, fill=MUTED,
-    )
-    return card
+def _compose_on_canvas(map_rgba: Image.Image) -> Image.Image:
+    """Lienzo blanco + sombra proyectada, sin panel (para el mapa solo)."""
+    alpha = map_rgba.split()[-1]
+    shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(14)).point(lambda a: int(a * 0.32))
+    canvas = Image.new("RGB", map_rgba.size, WHITE)
+    shadow_layer = Image.new("RGBA", map_rgba.size, (0, 0, 0, 0))
+    shadow_layer.putalpha(shadow_alpha)
+    canvas.paste(shadow_layer, (14, 18), shadow_layer)
+    canvas.paste(map_rgba, (0, 0), map_rgba)
+    return canvas
 
 
-def render_all_days(stack: np.ndarray, style: f3d.CategoricalRasterStyle) -> list[np.ndarray]:
+def _draw_sparkline(draw: ImageDraw.ImageDraw, x0: int, y: int, w: int, h: int, values: list[float], active_idx: int) -> None:
+    n = len(values)
+    bar_w = w / n
+    vmax = max(abs(v) for v in values) or 1.0
+    for i, v in enumerate(values):
+        norm = np.clip((v + VRANGE) / (2 * VRANGE), 0, 1)
+        r, g, b = (int(c * 255) for c in CMAP(norm)[:3])
+        bar_h = max(2, int(abs(v) / vmax * h))
+        bx0 = x0 + i * bar_w
+        by1 = y + h
+        by0 = by1 - bar_h
+        fill = (r, g, b) if i != active_idx else INK
+        draw.rectangle([bx0, by0, bx0 + bar_w * 0.72, by1], fill=fill)
+
+
+def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, land_means: list[float]) -> Image.Image:
+    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), WHITE)
+    map_with_shadow = _compose_on_canvas(map_rgba)
+    canvas.paste(map_with_shadow, (PANEL_W, 0))
+
+    draw = ImageDraw.Draw(canvas)
+    f_eyebrow = _font("arialbd.ttf", 13)
+    f_title = _font("arial.ttf", 30)
+    f_sub = _font("arial.ttf", 14)
+    f_day = _font("arialbd.ttf", 12)
+    f_date = _font("arial.ttf", 38)
+    f_mean = _font("arial.ttf", 15)
+    f_label = _font("arialbd.ttf", 12)
+    f_note = _font("arial.ttf", 11)
+    f_legend = _font("arial.ttf", 11)
+    f_attr = _font("arial.ttf", 10)
+
+    pad = 38
+    y = 36
+    draw.text((pad, y), f"COLOMBIA / {MESES_ES[month].upper()} {year}", font=f_eyebrow, fill=INK)
+    y += 26
+    draw.text((pad, y), "El calor del mes,", font=f_title, fill=INK)
+    y += 38
+    draw.text((pad, y), "dia a dia", font=f_title, fill=INK)
+    y += 48
+    draw.text((pad, y), "Temperatura media diaria a 2 m menos la normal", font=f_sub, fill=MUTED)
+    y += 18
+    draw.text((pad, y), "1991-2020 para ese dia", font=f_sub, fill=MUTED)
+
+    y += 42
+    the_date = date(year, month, day_idx + 1)
+    weekday = DIAS_ES[the_date.weekday()]
+    draw.text((pad, y), weekday, font=f_day, fill=FAINT)
+    y += 20
+    draw.text((pad, y), f"{day_idx + 1} de {MESES_ES[month]}", font=f_date, fill=INK)
+    y += 48
+    mean_val = land_means[day_idx]
+    draw.text((pad, y), f"media terrestre {mean_val:+.1f} °C", font=f_mean, fill=INK)
+
+    y += 34
+    draw.text((pad, y), "MEDIA DIARIA EN TIERRA", font=f_label, fill=FAINT)
+    y += 20
+    spark_w, spark_h = PANEL_W - 2 * pad, 56
+    _draw_sparkline(draw, pad, y, spark_w, spark_h, land_means, day_idx)
+    y += spark_h + 6
+    n_days = len(land_means)
+    for tick in (0, 7, 14, 21, n_days - 1):
+        tx = pad + (tick / (n_days - 1)) * spark_w
+        draw.text((tx - 4, y), str(tick + 1), font=f_legend, fill=FAINT)
+
+    y += 30
+    draw.text((pad, y), "La altura y el color muestran la misma anomalia.", font=f_note, fill=INK)
+    y += 15
+    draw.text((pad, y), "Calido sube; frio se hunde. No es elevacion real.", font=f_note, fill=MUTED)
+
+    y += 34
+    bar_w = PANEL_W - 2 * pad
+    bar_h = 12
+    for i in range(bar_w):
+        t = i / (bar_w - 1)
+        r, g, b = (int(c * 255) for c in CMAP(t)[:3])
+        draw.line([(pad + i, y), (pad + i, y + bar_h)], fill=(r, g, b))
+    y += bar_h + 16
+    for frac, label in ((0.0, "\u2264 -9 °C"), (0.25, "-4.5"), (0.5, "0"), (0.75, "+4.5"), (1.0, "\u2265 +9 °C")):
+        tx = pad + frac * bar_w
+        anchor = "la" if frac == 0 else ("ra" if frac == 1 else "ma")
+        draw.text((tx, y), label, font=f_legend, fill=FAINT, anchor=anchor)
+
+    attr_y = CANVAS_H - 86
+    draw.text((pad, attr_y), "ERA5-Land, medias diarias · Copernicus / ECMWF", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 14), "Normal: medias mensuales 1991-2020, por dia", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 28), "Natural Earth · forge3d-colombia, render 3D GPU", font=f_attr, fill=FAINT)
+    draw.text((pad, attr_y + 42), "Inspirado en 'A warmer shape of summer' de Milos Popovic", font=f_attr, fill=FAINT)
+
+    return canvas
+
+
+def render_all_days(stack: np.ndarray) -> tuple[list[Image.Image], list[float]]:
     tmp_path = OUT_DIR / "_tmp_shade.png"
-    frames = []
+    maps, land_means = [], []
     for i in range(stack.shape[0]):
-        frames.append(_compose_day_rgba(stack[i], style, tmp_path))
+        day = stack[i]
+        maps.append(_render_map_rgba(day, tmp_path))
+        land_means.append(float(np.nanmean(day)))
         print(f"[render] dia {i + 1:02d}/{stack.shape[0]} listo")
     tmp_path.unlink(missing_ok=True)
-    return frames
+    return maps, land_means
 
 
-def render_grid(day_rgbas: list[np.ndarray], year: int, month: int) -> Path:
-    n_days = len(day_rgbas)
-    n_cols, cell_scale = 6, 0.32
+def render_grid(maps: list[Image.Image], land_means: list[float], year: int, month: int) -> Path:
+    n_days = len(maps)
+    n_cols = 6
     n_rows = int(np.ceil(n_days / n_cols))
-    h, w = day_rgbas[0].shape[:2]
-    cell_w, cell_h = int(w * cell_scale), int(h * cell_scale)
-    label_h, margin = 22, 6
+    cell = RENDER_PX // 3
+    margin, label_h = 4, 20
 
     grid_img = Image.new(
         "RGB",
-        (n_cols * (cell_w + margin) + margin, n_rows * (cell_h + label_h + margin) + 90),
-        BG,
+        (n_cols * (cell + margin) + margin, n_rows * (cell + label_h + margin) + 70),
+        WHITE,
     )
     draw = ImageDraw.Draw(grid_img)
-    f_title = _font("arial.ttf", 26)
-    f_sub = _font("arial.ttf", 14)
-    f_day = _font("arial.ttf", 13)
+    f_title = _font("arial.ttf", 22)
+    f_sub = _font("arial.ttf", 12)
+    f_day = _font("arial.ttf", 11)
 
     month_name = MESES_ES[month]
-    draw.text((margin, 14), f"Anomalia de temperatura en Colombia — {month_name} {year}", font=f_title, fill=FG)
-    draw.text(
-        (margin, 48),
-        "Diferencia diaria vs. promedio 1991-2020 a 2 m — ERA5 (Copernicus C3S) · relieve y color via forge3d",
-        font=f_sub, fill=MUTED,
-    )
+    draw.text((margin, 12), f"Anomalia de temperatura en Colombia — {month_name} {year}", font=f_title, fill=INK)
+    draw.text((margin, 40), "ERA5-Land · media diaria vs. normal 1991-2020 · render 3D forge3d-colombia", font=f_sub, fill=MUTED)
 
-    for i, rgba in enumerate(day_rgbas):
+    for i, map_rgba in enumerate(maps):
         row, col = divmod(i, n_cols)
-        cell = Image.fromarray(rgba, mode="RGBA").resize((cell_w, cell_h), Image.LANCZOS)
-        x = margin + col * (cell_w + margin)
-        y = 90 + row * (cell_h + label_h + margin)
-        grid_img.paste(cell, (x, y), cell)
-        draw.text((x, y + cell_h + 2), f"{i + 1:02d}", font=f_day, fill=MUTED)
+        thumb = _compose_on_canvas(map_rgba).resize((cell, cell), Image.LANCZOS)
+        x = margin + col * (cell + margin)
+        y = 70 + row * (cell + label_h + margin)
+        grid_img.paste(thumb, (x, y))
+        draw.text((x, y + cell + 2), f"{i + 1:02d}  {land_means[i]:+.1f}°C", font=f_day, fill=MUTED)
 
     out_path = OUT_DIR / f"colombia_temp_anomaly_{year:04d}{month:02d}_grid.png"
     grid_img.save(out_path)
@@ -240,50 +306,43 @@ def render_grid(day_rgbas: list[np.ndarray], year: int, month: int) -> Path:
     return out_path
 
 
-def render_gif(day_rgbas: list[np.ndarray], year: int, month: int) -> Path:
+def render_gif(maps: list[Image.Image], land_means: list[float], year: int, month: int) -> Path:
     import imageio.v2 as imageio
 
-    month_name = MESES_ES[month]
-    subtitle = "Diferencia diaria vs. promedio 1991-2020 a 2 m — ERA5 (Copernicus C3S)"
-    frames = [
-        np.asarray(_compose_card(rgba, f"{i + 1:02d} de {month_name} {year}", subtitle))
-        for i, rgba in enumerate(day_rgbas)
+    cards = [
+        np.asarray(_compose_card(m, year, month, i, land_means))
+        for i, m in enumerate(maps)
     ]
     out_path = OUT_DIR / f"colombia_temp_anomaly_{year:04d}{month:02d}.gif"
-    imageio.mimsave(out_path, frames, duration=0.35, loop=0)
+    imageio.mimsave(out_path, cards, duration=0.35, loop=0)
     print(f"[ok] gif guardado en {out_path}")
     return out_path
 
 
 def render_video(
-    day_rgbas: list[np.ndarray], year: int, month: int,
+    maps: list[Image.Image], land_means: list[float], year: int, month: int,
     fps: int = 24, steps_per_day: int = 10,
 ) -> Path:
     import imageio.v2 as imageio
 
-    n_days = len(day_rgbas)
-    month_name = MESES_ES[month]
-    subtitle = "Diferencia diaria vs. promedio 1991-2020 a 2 m — ERA5 (Copernicus C3S)"
-    cards = [np.asarray(_compose_card(rgba, "", subtitle)) for rgba in day_rgbas]
+    n_days = len(maps)
+    cards = [
+        np.asarray(_compose_card(m, year, month, i, land_means)).astype(np.float32)
+        for i, m in enumerate(maps)
+    ]
 
     out_path = OUT_DIR / f"colombia_temp_anomaly_{year:04d}{month:02d}.mp4"
     writer = imageio.get_writer(out_path, fps=fps, codec="libx264", quality=8)
     try:
         for day in range(n_days):
-            start, end = cards[day].astype(np.float32), cards[min(day + 1, n_days - 1)].astype(np.float32)
-            title = f"{day + 1:02d} de {month_name} {year}"
+            start, end = cards[day], cards[min(day + 1, n_days - 1)]
             for s in range(steps_per_day):
                 t = s / steps_per_day
                 blended = np.clip(start * (1 - t) + end * t, 0, 255).astype(np.uint8)
-                frame = Image.fromarray(blended)
-                draw = ImageDraw.Draw(frame)
-                draw.text((40, 28), title, font=_font("arial.ttf", 34), fill=FG)
-                writer.append_data(np.asarray(frame))
-        last = Image.fromarray(cards[-1])
-        draw = ImageDraw.Draw(last)
-        draw.text((40, 28), f"{n_days:02d} de {month_name} {year}", font=_font("arial.ttf", 34), fill=FG)
+                writer.append_data(blended)
+        last = cards[-1].astype(np.uint8)
         for _ in range(fps):
-            writer.append_data(np.asarray(last))
+            writer.append_data(last)
     finally:
         writer.close()
 
@@ -301,12 +360,11 @@ def main() -> None:
 
     boundary = gpd.read_file(BOUNDARY_PATH)
     stack = _load_masked_stack(tif_path, boundary)
-    style = _build_style()
 
-    day_rgbas = render_all_days(stack, style)
-    render_grid(day_rgbas, year, month)
-    render_gif(day_rgbas, year, month)
-    render_video(day_rgbas, year, month)
+    maps, land_means = render_all_days(stack)
+    render_grid(maps, land_means, year, month)
+    render_gif(maps, land_means, year, month)
+    render_video(maps, land_means, year, month)
 
 
 if __name__ == "__main__":
