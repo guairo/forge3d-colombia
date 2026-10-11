@@ -71,10 +71,17 @@ print(list_datasets())
 
 Replica del [post de Milos Popovic sobre Europa](https://lnkd.in/p/ej6MgpQD)
 aplicada a Colombia — ese post usa forge3d por debajo (su enlace a "la
-herramienta" apunta al propio repositorio). Un mapa por cada dia del mes con
-la diferencia de temperatura a 2 m frente al promedio climatologico
-1991-2020, clasificada y coloreada con el motor nativo de forge3d
-(`CategoricalRasterStyle`) sobre datos ERA5 reales.
+herramienta" apunta al propio repositorio). Un mapa de relieve 3D por cada
+dia del mes con la diferencia de temperatura a 2 m frente al promedio
+climatologico 1991-2020, sobre datos ERA5 reales.
+
+El relieve es la propia anomalia (zonas mas calientes/frias se elevan o
+hunden) renderizado con el motor de iluminacion 3D nativo de forge3d
+(`MapScene` + `TerrainSource`); el color es la paleta divergente exacta de
+`CategoricalRasterStyle.apply(...).rgba`. Se combinan con un blend
+multiplicativo (sombreado × color) porque el tonemap de iluminacion de
+`MapScene` atenua los colores de cualquier overlay tematico — ver
+[`docs/guides/thematic_raster_styles.md`](docs/guides/thematic_raster_styles.md).
 
 <p align="center">
   <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="820">
@@ -88,15 +95,18 @@ la diferencia de temperatura a 2 m frente al promedio climatologico
   <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a></sub>
 </p>
 
-<sub>El titulo, subtitulo y la leyenda se componen con Pillow sobre el color
-exacto de paleta de forge3d (`style.apply(...).rgba`) — la composicion
-MapPlate (titulos/leyendas/escala integrados en el render 3D) es una
-funcion Pro de forge3d no incluida en el core open-source.</sub>
+<sub>El titulo, subtitulo y la leyenda se componen con Pillow sobre el render
+3D — la composicion MapPlate (titulos/leyendas/escala integrados
+directamente en el render) es una funcion Pro de forge3d no incluida en el
+core open-source.</sub>
 
 ### Reproducir o generar otro mes
 
+Requiere una GPU compatible con WebGPU (el relieve se renderiza con
+`forge3d.MapScene`, igual que el resto de ejemplos).
+
 ```bash
-pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg
+pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg scipy
 
 # 1. Cuenta gratuita + API key en https://cds.climate.copernicus.eu/
 #    y aceptar la licencia de "ERA5 hourly/monthly single levels".
