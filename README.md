@@ -1,39 +1,38 @@
-# forge3d-colombia
-
-Fork ligero de [forge3d](https://github.com/milos-agathon/forge3d) (terreno y
-cartografia path-traced para Python, motor en Rust + WebGPU) con un registro
-de datasets y ejemplos propios centrados en **Colombia**.
-
-Este proyecto no reimplementa el motor de render: usa el paquete `forge3d`
-tal cual se publica en PyPI y solo aporta datos de elevacion de Colombia,
-scripts de ejemplo y documentacion en espanol.
+<p align="center">
+  <strong style="font-size:28px;">forge3d-colombia</strong>
+</p>
 
 <p align="center">
-  <img src="docs/assets/la_guajira.png" alt="Serrania de la Macuira renderizada con forge3d" width="700">
+  <strong>Terreno y cartografia path-traced para Colombia.</strong><br>
+  Motor <a href="https://github.com/milos-agathon/forge3d">forge3d</a> (Rust + WebGPU) sin modificar, datos y ejemplos propios.
 </p>
+
 <p align="center">
-  <sub>Serrania de la Macuira, La Guajira — render generado por
-  <code>examples/la_guajira.py</code> sobre un DEM Copernicus GLO-30.</sub>
+  <a href="https://pypi.org/project/forge3d/"><img src="https://img.shields.io/pypi/v/forge3d?label=forge3d&color=EFA026&style=flat-square" alt="forge3d on PyPI"></a>
+  <a href="https://github.com/milos-agathon/forge3d/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-blue?style=flat-square" alt="License"></a>
+  <a href="https://github.com/milos-agathon/forge3d"><img src="https://img.shields.io/badge/built%20on-forge3d-8B4513?style=flat-square" alt="Built on forge3d"></a>
 </p>
+
+<p align="center">
+  <img src="docs/assets/la_guajira.png" alt="Serrania de la Macuira, La Guajira, renderizada con forge3d" width="820">
+</p>
+
+<p align="center">
+  <sub><b>Serrania de la Macuira</b>, La Guajira — bosque nuboso aislado sobre el desierto costero, cerca de Punta Gallinas.<br>
+  DEM Copernicus GLO-30 &nbsp;·&nbsp; render via <code>examples/la_guajira.py</code></sub>
+</p>
+
+---
+
+Este proyecto **no reimplementa el motor de render**: usa el paquete `forge3d`
+tal cual se publica en PyPI y aporta datos geograficos de Colombia, un
+registro de datasets y ejemplos ejecutables, con documentacion en espanol.
 
 ## Instalacion
 
 ```bash
 pip install forge3d
 pip install -r requirements.txt
-```
-
-## Datasets incluidos
-
-| Dataset      | Descripcion                                                                 | Fuente                              |
-|--------------|------------------------------------------------------------------------------|--------------------------------------|
-| `la-guajira` | Desierto de La Guajira, Serrania de la Macuira y costa Caribe cerca de Punta Gallinas (punto mas septentrional de Sudamerica) | Copernicus GLO-30 DEM (~30 m), ESA/Copernicus Programme |
-
-```python
-from forge3d_colombia.datasets import fetch_dem, list_datasets
-
-print(list_datasets())
-dem_path = fetch_dem("la-guajira")
 ```
 
 ## Sesenta segundos a un render
@@ -54,23 +53,47 @@ with f3d.open_viewer_async(terrain_path=dem_path, width=1440, height=900) as vie
 Tambien disponible como script: [`examples/la_guajira.py`](examples/la_guajira.py).
 Requiere una GPU compatible con WebGPU.
 
-## Anomalia de temperatura diaria (al estilo "August was hot in Europe")
+```python
+from forge3d_colombia.datasets import fetch_dem, list_datasets
 
-Replica del [post de Milos Popovic](https://lnkd.in/p/ej6MgpQD) sobre Europa,
-aplicada a Colombia: un mapa por cada dia del mes con la diferencia de
-temperatura a 2 m frente al promedio climatologico 1991-2020, usando datos
-ERA5 (Copernicus Climate Data Store).
+print(list_datasets())
+```
+
+| Dataset      | Descripcion                                                                 | Fuente                              |
+|--------------|------------------------------------------------------------------------------|--------------------------------------|
+| `la-guajira` | Desierto de La Guajira, Serrania de la Macuira y costa Caribe cerca de Punta Gallinas (punto mas septentrional de Sudamerica) | Copernicus GLO-30 DEM (~30 m), ESA/Copernicus Programme |
+
+---
+
+## Hecho con forge3d-colombia
+
+### Anomalia de temperatura diaria — septiembre 2026
+
+Replica del [post de Milos Popovic sobre Europa](https://lnkd.in/p/ej6MgpQD)
+aplicada a Colombia — ese post usa forge3d por debajo (su enlace a "la
+herramienta" apunta al propio repositorio). Un mapa por cada dia del mes con
+la diferencia de temperatura a 2 m frente al promedio climatologico
+1991-2020, clasificada y coloreada con el motor nativo de forge3d
+(`CategoricalRasterStyle`) sobre datos ERA5 reales.
 
 <p align="center">
-  <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="800">
+  <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="820">
+</p>
+
+<p align="center">
+  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="340">
 </p>
 <p align="center">
-  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="320">
-</p>
-<p align="center">
-  <sub>Version con transicion suave dia a dia (mejor calidad, ~13 s):
+  <sub>Version con transicion suave dia a dia (mejor calidad, ~13 s, descarga para reproducir):
   <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a></sub>
 </p>
+
+<sub>El titulo, subtitulo y la leyenda se componen con Pillow sobre el color
+exacto de paleta de forge3d (`style.apply(...).rgba`) — la composicion
+MapPlate (titulos/leyendas/escala integrados en el render 3D) es una
+funcion Pro de forge3d no incluida en el core open-source.</sub>
+
+### Reproducir o generar otro mes
 
 ```bash
 pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg
@@ -87,13 +110,16 @@ python scripts/render_temperature_anomaly.py 2026 08
 `fetch_era5_colombia.py` descarga t2m horario del mes objetivo y la
 climatologia mensual 1991-2020, calcula la anomalia diaria y la guarda como
 GeoTIFF multibanda en `assets/era5/`. `render_temperature_anomaly.py` recorta
-por el contorno de Colombia ([`assets/geojson/colombia_boundary.geojson`](assets/geojson/colombia_boundary.geojson))
-y genera el mosaico y el GIF en `docs/assets/`.
+por el contorno de Colombia ([`assets/geojson/colombia_boundary.geojson`](assets/geojson/colombia_boundary.geojson)),
+clasifica cada dia con `forge3d.CategoricalRasterStyle` y genera el mosaico,
+el GIF y el video en `docs/assets/`.
 
 > Si `rasterio` falla con un error de `PROJ`/`EPSG` al escribir el GeoTIFF
 > (tipico cuando hay otra instalacion de PROJ en el sistema, p. ej. PostGIS),
 > fija `PROJ_LIB` a la carpeta `proj_data` incluida en tu propio `rasterio`
 > antes de ejecutar los scripts.
+
+---
 
 ## Agregar mas lugares de Colombia
 
