@@ -65,11 +65,11 @@ ERA5 (Copernicus Climate Data Store).
   <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="800">
 </p>
 <p align="center">
-  <video src="https://raw.githubusercontent.com/guairo/forge3d-colombia/main/docs/assets/colombia_temp_anomaly_202609.mp4" width="320" controls loop muted>
-    Tu visor de Markdown no reproduce video embebido; abre
-    <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a> directamente,
-    o usa el GIF: <a href="docs/assets/colombia_temp_anomaly_202609.gif">colombia_temp_anomaly_202609.gif</a>.
-  </video>
+  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="320">
+</p>
+<p align="center">
+  <sub>Version con transicion suave dia a dia (mejor calidad, ~13 s):
+  <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a></sub>
 </p>
 
 ```bash
