@@ -408,11 +408,14 @@ def render_gif(maps: list[Image.Image], land_means: list[float], year: int, mont
 
 def render_video(
     maps: list[Image.Image], land_means: list[float], year: int, month: int,
-    fps: int = 24, hold_frames: int = 48, transition_frames: int = 60,
+    fps: int = 24, hold_frames: int = 16, transition_frames: int = 8,
 ) -> Path:
-    """Video con una pausa por dia (para poder leer la tarjeta) seguida de
-    una transicion lenta y prolongada al dia siguiente (~4.5 s por dia,
-    ~2.3 min en total para un mes de 30 dias)."""
+    """Video con una pausa por dia seguida de una transicion al dia
+    siguiente. El ritmo (~1 s por dia, ~31 s en total para un mes de 30
+    dias) esta medido directamente del video original de Milos Popovic
+    (924 frames a 30 fps / 30 dias): hold y transicion ocupan cada uno
+    aprox. la mitad del segundo por dia, no los varios segundos que se
+    probaron en iteraciones anteriores."""
     import imageio.v2 as imageio
 
     n_days = len(maps)
