@@ -305,21 +305,46 @@ def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, la
     return canvas
 
 
-def render_all_days(stack: np.ndarray) -> tuple[list[Image.Image], list[float]]:
+def render_all_days(stack: np.ndarray, year: int, month: int, use_cache: bool = True) -> tuple[list[Image.Image], list[float]]:
+    """Renderiza (o recupera de cache) el snapshot recortado de cada dia.
+
+    El render 3D (abrir el visor, cargar terreno/overlay, pedir snapshot)
+    es la parte lenta del pipeline; cachear los PNG ya compuestos en
+    assets/era5/_frames_cache/<YYYYMM>/ permite reajustar el ritmo del
+    video/gif o el diseño del panel sin volver a tocar el motor.
+    """
+    n_days = stack.shape[0]
+    cache_dir = ERA5_DIR / "_frames_cache" / f"{year:04d}{month:02d}"
+    cache_files = [cache_dir / f"day_{i + 1:02d}.png" for i in range(n_days)]
+    means_path = cache_dir / "land_means.json"
+
+    if use_cache and means_path.exists() and all(p.exists() for p in cache_files):
+        import json
+        maps = [Image.open(p).convert("RGBA") for p in cache_files]
+        land_means = json.loads(means_path.read_text())
+        print(f"[info] usando cache de renders en {cache_dir}")
+        return maps, land_means
+
     zscale = _safe_zscale(stack, grid_width=stack.shape[2])
     print(f"[info] zscale calibrado a {zscale:.1f} para este mes")
 
     dem_path = OUT_DIR / "_tmp_dem.tif"
     overlay_path = OUT_DIR / "_tmp_overlay.png"
     snap_path = OUT_DIR / "_tmp_snap.png"
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     maps, land_means = [], []
     with _open_viewer_with_first_day(stack[0], dem_path, overlay_path) as viewer:
-        for i in range(stack.shape[0]):
+        for i in range(n_days):
             day = stack[i]
-            maps.append(_render_map_rgba(viewer, day, zscale, dem_path, overlay_path, snap_path))
+            map_rgba = _render_map_rgba(viewer, day, zscale, dem_path, overlay_path, snap_path)
+            maps.append(map_rgba)
             land_means.append(float(np.nanmean(day)))
-            print(f"[render] dia {i + 1:02d}/{stack.shape[0]} listo")
+            map_rgba.save(cache_files[i])
+            print(f"[render] dia {i + 1:02d}/{n_days} listo")
+
+    import json
+    means_path.write_text(json.dumps(land_means))
 
     for p in (dem_path, overlay_path, snap_path):
         p.unlink(missing_ok=True)
@@ -383,11 +408,11 @@ def render_gif(maps: list[Image.Image], land_means: list[float], year: int, mont
 
 def render_video(
     maps: list[Image.Image], land_means: list[float], year: int, month: int,
-    fps: int = 24, hold_frames: int = 16, transition_frames: int = 8,
+    fps: int = 24, hold_frames: int = 32, transition_frames: int = 16,
 ) -> Path:
     """Video con una pausa por dia (para poder leer la tarjeta) seguida de
-    una transicion suave al dia siguiente — ritmo similar al original
-    (~1 s por dia, ~30 s en total para un mes de 30 dias)."""
+    una transicion suave al dia siguiente (~2 s por dia, ~1 min en total
+    para un mes de 30 dias)."""
     import imageio.v2 as imageio
 
     n_days = len(maps)
@@ -430,7 +455,7 @@ def main() -> None:
     boundary = gpd.read_file(BOUNDARY_PATH)
     stack = _load_masked_stack(tif_path, boundary)
 
-    maps, land_means = render_all_days(stack)
+    maps, land_means = render_all_days(stack, year, month)
     render_grid(maps, land_means, year, month)
     render_gif(maps, land_means, year, month)
     render_video(maps, land_means, year, month)

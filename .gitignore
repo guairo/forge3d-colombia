@@ -458,3 +458,6 @@ landuse/landuse/glad_cropland_2019.tif
 # Datasets de ejemplo de otros paises, no relacionados a Colombia (reducir cuota LFS)
 assets/tif/switzerland_land_cover.tif
 assets/tif/Bryce_Canyon.tif
+
+# Cache de renders (regenerable, ver scripts/render_temperature_anomaly.py)
+assets/era5/_frames_cache/
