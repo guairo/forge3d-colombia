@@ -87,7 +87,7 @@ CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
 # Camara / relieve del visor interactivo (ver examples/population_spike_worldpop)
 CAMERA_PHI = 78.0
 CAMERA_THETA = -60.0
-CAMERA_RADIUS = 480.0
+CAMERA_RADIUS = 340.0
 CAMERA_FOV = 32.0
 SUN_AZIMUTH, SUN_ELEVATION, SUN_INTENSITY, AMBIENT = 110.0, 35.0, 3.0, 0.18
 ZSCALE_PEAK_FRACTION = 0.55  # pico mas alto ~= esta fraccion del ancho de la rejilla
@@ -408,11 +408,11 @@ def render_gif(maps: list[Image.Image], land_means: list[float], year: int, mont
 
 def render_video(
     maps: list[Image.Image], land_means: list[float], year: int, month: int,
-    fps: int = 24, hold_frames: int = 48, transition_frames: int = 24,
+    fps: int = 24, hold_frames: int = 48, transition_frames: int = 60,
 ) -> Path:
     """Video con una pausa por dia (para poder leer la tarjeta) seguida de
-    una transicion suave al dia siguiente (~3 s por dia, ~1.5 min en total
-    para un mes de 30 dias)."""
+    una transicion lenta y prolongada al dia siguiente (~4.5 s por dia,
+    ~2.3 min en total para un mes de 30 dias)."""
     import imageio.v2 as imageio
 
     n_days = len(maps)
