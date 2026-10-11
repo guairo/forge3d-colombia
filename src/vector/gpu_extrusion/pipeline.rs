@@ -1,0 +1,407 @@
+use super::buffers::{pack_tessellations, PolygonBuffers};
+use super::types::GpuExtrusionOutput;
+use crate::core::resource_tracker::{tracked_create_buffer, tracked_create_buffer_init};
+use crate::vector::extrusion::{tessellate_polygon, TessellatedPolygon};
+use glam::Vec2;
+
+pub struct GpuExtrusion {
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+impl GpuExtrusion {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader_module = crate::core::shader_registry::create_labeled_shader_module(
+            device,
+            "vf.Vector.Extrusion.Shader",
+            include_str!("../../shaders/extrusion.wgsl"),
+        );
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vf.Vector.Extrusion.BindGroupLayout"),
+            entries: &[
+                // Metadata
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Base vertices
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Base indices
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Ring vertices + UVs
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Output positions
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Output indices
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Output normals
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Output UVs
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Uniform height parameter
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vf.Vector.Extrusion.PipelineLayout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = crate::core::shader_registry::create_compute_pipeline_scoped(
+            device,
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("vf.Vector.Extrusion.Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader_module,
+                entry_point: "main",
+            },
+        );
+
+        Self {
+            pipeline,
+            bind_group_layout,
+        }
+    }
+
+    pub fn extrude(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        polygons: &[Vec<Vec2>],
+        height: f32,
+    ) -> Result<GpuExtrusionOutput, String> {
+        if polygons.is_empty() {
+            return Err("no polygons provided".to_string());
+        }
+
+        let tessellated: Vec<TessellatedPolygon> = polygons
+            .iter()
+            .enumerate()
+            .map(|(idx, polygon)| {
+                tessellate_polygon(polygon).ok_or_else(|| {
+                    format!(
+                        "polygon {} failed tessellation (need >=3 valid vertices)",
+                        idx
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        if tessellated.is_empty() {
+            return Err("no valid polygons to extrude".to_string());
+        }
+
+        let packed = pack_tessellations(&tessellated)?;
+        let PolygonBuffers {
+            metas,
+            base_vertices,
+            base_indices,
+            ring_vertices,
+            vertex_count,
+            index_count,
+        } = packed;
+
+        if vertex_count == 0 || index_count == 0 {
+            return Err("tessellated polygon produced empty mesh".to_string());
+        }
+
+        let meta_buffer = tracked_create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("vf.Vector.Extrusion.Meta"),
+                contents: bytemuck::cast_slice(&metas),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let base_vertex_buffer = tracked_create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("vf.Vector.Extrusion.BaseVertices"),
+                contents: bytemuck::cast_slice(&base_vertices),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let base_index_buffer = tracked_create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("vf.Vector.Extrusion.BaseIndices"),
+                contents: bytemuck::cast_slice(&base_indices),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let ring_vertex_buffer = tracked_create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("vf.Vector.Extrusion.RingVertices"),
+                contents: bytemuck::cast_slice(&ring_vertices),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let positions_size = (vertex_count as u64) * 16;
+        let indices_size = (index_count as u64) * 4;
+        let normals_size = (vertex_count as u64) * 16;
+        let uvs_size = (vertex_count as u64) * 8;
+
+        let positions_storage = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Output.Positions"),
+                size: positions_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let indices_storage = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Output.Indices"),
+                size: indices_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let normals_storage = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Output.Normals"),
+                size: normals_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let uvs_storage = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Output.UVs"),
+                size: uvs_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Readback requires a dedicated COPY_DST | MAP_READ staging buffer on current wgpu.
+        let positions_buffer = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Readback.Positions"),
+                size: positions_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let indices_buffer = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Readback.Indices"),
+                size: indices_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let normals_buffer = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Readback.Normals"),
+                size: normals_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let uvs_buffer = tracked_create_buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("vf.Vector.Extrusion.Readback.UVs"),
+                size: uvs_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let height_buffer = tracked_create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("vf.Vector.Extrusion.Height"),
+                contents: bytemuck::cast_slice(&[height]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vf.Vector.Extrusion.BindGroup"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: meta_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: base_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: base_index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: ring_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: positions_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: indices_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: normals_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: uvs_storage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: height_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("vf.Vector.Extrusion.Encoder"),
+        });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("vf.Vector.Extrusion.Pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            let workgroup_count = ((metas.len() as u32) + 63) / 64;
+            compute_pass.dispatch_workgroups(workgroup_count.max(1), 1, 1);
+        }
+
+        encoder.copy_buffer_to_buffer(&positions_storage, 0, &positions_buffer, 0, positions_size);
+        encoder.copy_buffer_to_buffer(&indices_storage, 0, &indices_buffer, 0, indices_size);
+        encoder.copy_buffer_to_buffer(&normals_storage, 0, &normals_buffer, 0, normals_size);
+        encoder.copy_buffer_to_buffer(&uvs_storage, 0, &uvs_buffer, 0, uvs_size);
+
+        queue.submit(Some(encoder.finish()));
+
+        Ok(GpuExtrusionOutput {
+            positions: positions_buffer,
+            indices: indices_buffer,
+            normals: normals_buffer,
+            uvs: uvs_buffer,
+            vertex_count,
+            index_count,
+        })
+    }
+}

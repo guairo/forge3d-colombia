@@ -1,0 +1,255 @@
+use super::super::*;
+
+#[cfg(feature = "extension-module")]
+#[pyclass(module = "forge3d._forge3d", name = "Frame")]
+pub struct Frame {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    texture: Arc<crate::core::resource_tracker::TrackedTexture>,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+impl Frame {
+    pub(crate) fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        texture: impl Into<Arc<crate::core::resource_tracker::TrackedTexture>>,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        Self {
+            device,
+            queue,
+            texture: texture.into(),
+            width,
+            height,
+            format,
+        }
+    }
+
+    pub(crate) fn read_tight_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        read_texture_tight(
+            &self.device,
+            &self.queue,
+            &self.texture,
+            (self.width, self.height),
+            self.format,
+        )
+    }
+
+    #[cfg(feature = "images")]
+    pub(crate) fn read_rgba_f32(&self) -> anyhow::Result<Vec<f32>> {
+        match self.format {
+            wgpu::TextureFormat::Rgba8Unorm
+            | wgpu::TextureFormat::Rgba8UnormSrgb
+            | wgpu::TextureFormat::Bgra8Unorm
+            | wgpu::TextureFormat::Bgra8UnormSrgb => {
+                let data = self.read_tight_bytes()?;
+                let mut rgba = Vec::with_capacity(data.len());
+                for px in data.chunks_exact(4) {
+                    match self.format {
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+                            rgba.push(px[2] as f32 / 255.0);
+                            rgba.push(px[1] as f32 / 255.0);
+                            rgba.push(px[0] as f32 / 255.0);
+                            rgba.push(px[3] as f32 / 255.0);
+                        }
+                        _ => {
+                            rgba.push(px[0] as f32 / 255.0);
+                            rgba.push(px[1] as f32 / 255.0);
+                            rgba.push(px[2] as f32 / 255.0);
+                            rgba.push(px[3] as f32 / 255.0);
+                        }
+                    }
+                }
+                Ok(rgba)
+            }
+            wgpu::TextureFormat::Rgba16Float => crate::core::hdr::read_hdr_texture(
+                &self.device,
+                &self.queue,
+                &self.texture,
+                self.width,
+                self.height,
+                self.format,
+            )
+            .map_err(anyhow::Error::msg),
+            other => Err(anyhow::anyhow!(
+                "unsupported texture format for float readback: {:?}",
+                other
+            )),
+        }
+    }
+
+    #[cfg(feature = "images")]
+    pub(crate) fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl Frame {
+    #[new]
+    fn py_new() -> PyResult<Self> {
+        Err(PyRuntimeError::new_err(
+            "Frame objects are constructed internally by forge3d",
+        ))
+    }
+
+    #[getter]
+    fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn format(&self) -> String {
+        format!("{:?}", self.format)
+    }
+
+    fn save(&self, path: &str) -> PyResult<()> {
+        let path_obj = Path::new(path);
+        match self.format {
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+                if let Some(ext) = path_obj.extension().and_then(|ext| ext.to_str()) {
+                    if !ext.eq_ignore_ascii_case("png") {
+                        return Err(PyValueError::new_err(format!(
+                            "expected .png extension for RGBA8 frame save, got .{}",
+                            ext
+                        )));
+                    }
+                }
+                let mut data = self
+                    .read_tight_bytes()
+                    .map_err(|err| PyRuntimeError::new_err(format!("readback failed: {err:#}")))?;
+                for px in data.chunks_exact_mut(4) {
+                    px[3] = 255;
+                }
+                image_write::write_png_rgba8(path_obj, &data, self.width, self.height).map_err(
+                    |err| PyRuntimeError::new_err(format!("failed to write PNG: {err:#}")),
+                )?;
+                Ok(())
+            }
+            wgpu::TextureFormat::Rgba16Float => {
+                let save_png = crate::core::gpu::deterministic_mode()
+                    && path_obj
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
+                if !save_png {
+                    if let Some(ext) = path_obj.extension().and_then(|ext| ext.to_str()) {
+                        if !ext.eq_ignore_ascii_case("exr") {
+                            return Err(PyValueError::new_err(format!(
+                                "expected .exr extension for RGBA16F frame save, got .{}",
+                                ext
+                            )));
+                        }
+                    }
+                }
+                #[cfg(feature = "images")]
+                {
+                    let data = crate::core::hdr::read_hdr_texture(
+                        &self.device,
+                        &self.queue,
+                        &self.texture,
+                        self.width,
+                        self.height,
+                        self.format,
+                    )
+                    .map_err(|err| {
+                        PyRuntimeError::new_err(format!("HDR readback failed: {err}"))
+                    })?;
+
+                    if save_png {
+                        let rgba8 = deterministic_rgba8(&data);
+                        image_write::write_png_rgba8(path_obj, &rgba8, self.width, self.height)
+                            .map_err(|err| {
+                                PyRuntimeError::new_err(format!("failed to write PNG: {err:#}"))
+                            })?;
+                    } else {
+                        exr_write::write_exr_rgba_f32(
+                            path_obj,
+                            self.width,
+                            self.height,
+                            &data,
+                            "beauty",
+                        )
+                        .map_err(|err| {
+                            PyRuntimeError::new_err(format!("failed to write EXR: {err:#}"))
+                        })?;
+                    }
+                    Ok(())
+                }
+                #[cfg(not(feature = "images"))]
+                {
+                    Err(PyRuntimeError::new_err(
+                        "saving RGBA16F frames requires the 'images' feature",
+                    ))
+                }
+            }
+            other => Err(PyValueError::new_err(format!(
+                "unsupported texture format for save: {:?}",
+                other
+            ))),
+        }
+    }
+
+    fn to_numpy<'py>(&self, py: Python<'py>) -> PyResult<&'py PyArray3<u8>> {
+        let data = match self.format {
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => self
+                .read_tight_bytes()
+                .map_err(|err| PyRuntimeError::new_err(format!("readback failed: {err:#}")))?,
+            wgpu::TextureFormat::Rgba16Float if crate::core::gpu::deterministic_mode() => {
+                let hdr = crate::core::hdr::read_hdr_texture(
+                    &self.device,
+                    &self.queue,
+                    &self.texture,
+                    self.width,
+                    self.height,
+                    self.format,
+                )
+                .map_err(|err| PyRuntimeError::new_err(format!("HDR readback failed: {err}")))?;
+                deterministic_rgba8(&hdr)
+            }
+            wgpu::TextureFormat::Rgba16Float => {
+                return Err(PyRuntimeError::new_err(
+                    "to_numpy for RGBA16F frames is not implemented yet",
+                ))
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported texture format for numpy conversion: {:?}",
+                    other
+                )))
+            }
+        };
+        let arr =
+            ndarray::Array3::from_shape_vec((self.height as usize, self.width as usize, 4), data)
+                .map_err(|_| {
+                    PyRuntimeError::new_err("failed to reshape RGBA buffer into numpy array")
+                })?;
+        Ok(arr.into_pyarray_bound(py).into_gil_ref())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Frame(width={}, height={}, format={:?})",
+            self.width, self.height, self.format
+        )
+    }
+}
+
+/// Deterministic-mode RGBA16F -> RGBA8 quantization shared by `Frame.save`
+/// (`.png`) and `Frame.to_numpy`, so both expose the same canonical bytes.
+fn deterministic_rgba8(hdr: &[f32]) -> Vec<u8> {
+    let mut rgba8 = Vec::with_capacity(hdr.len());
+    for px in hdr.chunks_exact(4) {
+        for channel in &px[..3] {
+            let code = (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+            rgba8.push(if code == 0 { 0 } else { (code - 1) | 1 });
+        }
+        rgba8.push(255);
+    }
+    rgba8
+}

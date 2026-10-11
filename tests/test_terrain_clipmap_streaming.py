@@ -1,0 +1,594 @@
+# tests/test_terrain_clipmap_streaming.py
+# BOP-P2-02: clipmap geometry provider + runtime height-tile streaming.
+#
+# Covers the TerrainRenderer runtime path directly:
+# - the indexed clipmap ring/skirt mesh renders on the default backend
+#   (no backend-conditional grid fallback),
+# - clipmap renders are deterministic,
+# - LOD-ring boundaries show no cracks (background bleed-through) at steep
+#   relief and a grazing camera,
+# - height streaming (ClipmapStreamer + AsyncTileLoader + HeightMosaic)
+#   converges during a fly-through with tile loads in flight, never showing
+#   holes (coarse-prefill fallback), with GPU-resident height memory bounded.
+
+from __future__ import annotations
+
+import tempfile
+import time
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import forge3d as f3d
+import forge3d._forge3d as native
+
+from _terrain_runtime import (
+    _build_overlay,
+    _write_test_hdr,
+    terrain_rendering_available,
+)
+from forge3d.diagnostics import render_certificate
+from forge3d.terrain_params import PomSettings, make_terrain_params_config
+from test_orbis_task6_contracts import _write_quadrant_cog
+
+requires_terrain = pytest.mark.skipif(
+    not terrain_rendering_available(),
+    reason="Terrain rendering runtime unavailable on this adapter",
+)
+
+TERRAIN_SPAN_M = 100_000.0
+CLIPMAP_MODE = "clipmap:4:32:32:10:0.3"
+# Background clear color from the terrain render pass (linear 0.1/0.1/0.15).
+BACKGROUND_RGB_LINEAR = np.array([0.1, 0.1, 0.15], dtype=np.float32)
+
+
+def _steep_dem(size: int = 128) -> np.ndarray:
+    x = np.linspace(-1.0, 1.0, size, dtype=np.float32)
+    y = np.linspace(-1.0, 1.0, size, dtype=np.float32)
+    xx, yy = np.meshgrid(x, y)
+    ridges = 0.5 * np.sin(xx * np.pi * 5.0) * np.cos(yy * np.pi * 4.0)
+    peak = 0.8 * np.exp(-(xx**2 + yy**2) * 3.0)
+    dem = ridges + peak
+    dem -= dem.min()
+    dem /= max(float(dem.max()), 1e-6)
+    return dem.astype(np.float32)
+
+
+def _uniquely_valued_quadrant_dem(size: int = 256) -> np.ndarray:
+    """Four unmistakable virtual quadrants plus within-tile relief."""
+    dem = _steep_dem(size) * np.float32(0.18)
+    half = size // 2
+    dem[:half, half:] += np.float32(0.22)
+    dem[half:, :half] += np.float32(0.48)
+    dem[half:, half:] += np.float32(0.76)
+    dem /= float(dem.max())
+    return dem.astype(np.float32)
+
+
+def _make_params(
+    *,
+    camera_mode: str = CLIPMAP_MODE,
+    size_px: tuple[int, int] = (128, 80),
+    theta_deg: float = 49.0,
+    phi_deg: float = 28.0,
+    cam_radius: float = 1.0,
+    z_scale: float = 1.2,
+    culling: str = "frustum",
+    shading: str = "forward",
+    vt=None,
+    terrain_span: float = TERRAIN_SPAN_M,
+    cam_target: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> "f3d.TerrainRenderParams":
+    return f3d.TerrainRenderParams(
+        make_terrain_params_config(
+            size_px=size_px,
+            render_scale=1.0,
+            terrain_span=terrain_span,
+            msaa_samples=1,
+            z_scale=z_scale,
+            exposure=1.0,
+            domain=(0.0, 1.0),
+            albedo_mode="colormap",
+            colormap_strength=1.0,
+            ibl_enabled=True,
+            light_azimuth_deg=138.0,
+            light_elevation_deg=24.0,
+            sun_intensity=2.4,
+            cam_radius=cam_radius,
+            cam_phi_deg=phi_deg,
+            cam_theta_deg=theta_deg,
+            cam_target=list(cam_target),
+            fov_y_deg=45.0,
+            camera_mode=camera_mode,
+            culling=culling,
+            shading=shading,
+            vt=vt,
+            clip=(0.1, terrain_span * 1.5),
+            overlays=[_build_overlay()],
+            pom=PomSettings(False, "Occlusion", 0.0, 1, 1, 0, False, False),
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def terrain_ibl():
+    with tempfile.TemporaryDirectory() as td:
+        hdr_path = Path(td) / "probe.hdr"
+        _write_test_hdr(hdr_path)
+        yield f3d.IBL.from_hdr(str(hdr_path), intensity=1.0)
+
+
+def _render_rgba(renderer, params, heightmap, terrain_ibl) -> np.ndarray:
+    material_set = f3d.MaterialSet.terrain_default()
+    frame = renderer.render_terrain_pbr_pom(
+        material_set=material_set,
+        env_maps=terrain_ibl,
+        params=params,
+        heightmap=heightmap,
+        target=None,
+        water_mask=None,
+    )
+    return np.asarray(frame.to_numpy())
+
+
+def _background_mask(rgba: np.ndarray, tolerance: int = 6) -> np.ndarray:
+    srgb = np.where(
+        BACKGROUND_RGB_LINEAR <= 0.0031308,
+        BACKGROUND_RGB_LINEAR * 12.92,
+        1.055 * np.power(BACKGROUND_RGB_LINEAR, 1.0 / 2.4) - 0.055,
+    )
+    bg = np.round(srgb * 255.0).astype(np.int32)
+    diff = np.abs(rgba[..., :3].astype(np.int32) - bg[None, None, :])
+    return (diff <= tolerance).all(axis=-1)
+
+
+def test_terrain_renderer_exposes_height_streaming_api():
+    for name in (
+        "enable_height_streaming",
+        "disable_height_streaming",
+        "stream_height_tiles",
+        "height_streaming_stats",
+    ):
+        assert hasattr(f3d.TerrainRenderer, name), f"TerrainRenderer.{name} missing"
+
+
+@requires_terrain
+def test_legacy_cog_streaming_stays_flat_when_globe_support_is_compiled(tmp_path):
+    assert hasattr(native.TerrainRenderer, "enable_height_streaming_cog_globe"), (
+        "this compatibility test must run in the enable-globe build"
+    )
+    dataset = native.CogDataset(
+        _write_quadrant_cog(tmp_path / "legacy-flat-cog.tif").as_uri(),
+        cache_size_mb=1,
+    )
+    renderer = native.TerrainRenderer(native.Session(window=False))
+    renderer.enable_height_streaming_cog(
+        dataset,
+        terrain_extent_m=10_000.0,
+        ring_count=1,
+        ring_resolution=8,
+        lod=1,
+        tile_resolution=8,
+        max_in_flight=2,
+        pool_size=1,
+        coarse_prefill=False,
+        max_resident_bytes=1024 * 1024,
+        max_gpu_visible_bytes=1024 * 1024,
+    )
+
+    stats = renderer.stream_height_tiles((250.0, 500.0, -125.0), max_uploads=0)
+    assert stats["effective_target_lod"] == 1
+    assert stats["center"] == pytest.approx((312.5, -156.25))
+    with pytest.raises(RuntimeError, match="flat height streaming requires"):
+        renderer.stream_height_tiles_globe((6_372_000.0, 0.0, 0.0), max_uploads=0)
+
+
+@requires_terrain
+def test_tile_residency_and_gpu_visible_ceiling_are_independent_limits():
+    budget = 1024 * 1024
+    kwargs = dict(
+        terrain_extent_m=TERRAIN_SPAN_M,
+        ring_count=2,
+        ring_resolution=16,
+        lod=3,
+        tile_resolution=32,
+        max_in_flight=32,
+        pool_size=1,
+        dem=_steep_dem(64),
+        coarse_prefill=False,
+    )
+    renderer = f3d.TerrainRenderer(f3d.Session(window=False))
+    renderer.enable_height_streaming(**kwargs, max_resident_bytes=budget)
+    stats = renderer.stream_height_tiles((0.0, 500.0, 0.0), max_uploads=0)
+    assert f3d.terrain_vt_stats()["budget_bytes_height"] == budget
+    assert stats["resident_height_bytes"] <= budget
+    assert stats["gpu_visible_high_water_bytes"] < 512 * 1024 * 1024
+    renderer.disable_height_streaming()
+
+    # These upload flights exceed the original 1 MiB total ceiling even with
+    # one resident tile. The separate total limit must continue to reject it.
+    with pytest.raises(RuntimeError, match="exceeds strict GPU-visible budget 1048576"):
+        renderer.enable_height_streaming(
+            **kwargs, max_resident_bytes=budget, max_gpu_visible_bytes=budget
+        )
+    with pytest.raises(RuntimeError, match="cannot hold one 5120-byte height tile"):
+        renderer.enable_height_streaming(**kwargs, max_resident_bytes=5119)
+
+
+@requires_terrain
+def test_small_tile_residency_limit_binds_at_steady_state():
+    from _tessella_evidence import record_tessella_result
+    from test_flythrough_popping import MAX_WARMUP_STEPS
+
+    # D1: four 32x32 R32-height/R8-coverage tiles out of a 64-tile footprint.
+    # Reuse the flythrough's established async settling policy, not a new cap.
+    k = 4
+    tile_bytes = 5120
+    budget = k * tile_bytes
+    gpu_ceiling = 512 * 1024 * 1024
+    renderer = f3d.TerrainRenderer(f3d.Session(window=False))
+    renderer.enable_height_streaming(
+        terrain_extent_m=TERRAIN_SPAN_M,
+        ring_count=2,
+        ring_resolution=16,
+        lod=3,
+        tile_resolution=32,
+        max_in_flight=32,
+        pool_size=1,
+        dem=_steep_dem(64),
+        coarse_prefill=False,
+        max_resident_bytes=budget,
+    )
+    samples = []
+    for _ in range(MAX_WARMUP_STEPS):
+        stats = renderer.stream_height_tiles((0.0, 500.0, 0.0), max_uploads=32)
+        samples.append(stats)
+        assert stats["resident_fine_tiles"] <= k, stats
+        assert stats["resident_height_bytes"] <= budget, stats
+        assert stats["gpu_visible_current_bytes"] <= gpu_ceiling, stats
+        assert stats["gpu_visible_high_water_bytes"] <= gpu_ceiling, stats
+        time.sleep(0)
+    steady = [row for row in samples if row["tiles_uploaded"] >= row["total_tiles"]]
+    assert stats["total_tiles"] == 64 and k < stats["total_tiles"], stats
+    assert steady, "the bounded loop must exercise replacements beyond initial fill"
+    assert {row["resident_fine_tiles"] for row in steady} == {k}, steady
+    assert f3d.terrain_vt_stats()["budget_bytes_height"] == budget
+    record_tessella_result("height_residency_limit", {
+        "max_resident_bytes": budget,
+        "tile_bytes": tile_bytes,
+        "tile_capacity": k,
+        "steps": len(samples),
+        "steady_samples": len(steady),
+        "peak_resident_fine_tiles": max(row["resident_fine_tiles"] for row in samples),
+        "peak_resident_height_bytes": max(row["resident_height_bytes"] for row in samples),
+        "gpu_visible_high_water_bytes": max(row["gpu_visible_high_water_bytes"] for row in samples),
+        "steady_state": "capacity-saturated LRU at a fixed camera",
+        "final": stats,
+    })
+    renderer.disable_height_streaming()
+
+
+@requires_terrain
+class TestClipmapGeometryProvider:
+    def test_clipmap_render_uses_gpu_lod_indirect_draws(self, terrain_ibl):
+        renderer = f3d.TerrainRenderer(f3d.Session(window=False))
+        _render_rgba(renderer, _make_params(), _steep_dem(64), terrain_ibl)
+
+        certificate = render_certificate(sign=False)
+        main_pass = next(p for p in certificate["passes"] if p["label"] == "terrain.main")
+        assert main_pass["draw_calls"] >= 1
+        assert "clipmap_lod_select" in certificate["engine"]["wgsl_module_hashes"]
+
+    def test_clipmap_render_is_deterministic(self, terrain_ibl):
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+        dem = _steep_dem(64)
+        params = _make_params()
+        first = _render_rgba(renderer, params, dem, terrain_ibl)
+        second = _render_rgba(renderer, params, dem, terrain_ibl)
+        assert first.shape == second.shape
+        np.testing.assert_array_equal(first, second)
+
+    def test_clipmap_render_fills_frame_without_cracks(self, terrain_ibl):
+        # Steep relief + grazing camera: cracks between LOD rings would let the
+        # clear color bleed through inside the terrain footprint.
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+        dem = _steep_dem(128)
+        params = _make_params(theta_deg=72.0, z_scale=2.0)
+        rgba = _render_rgba(renderer, params, dem, terrain_ibl)
+        assert int(rgba[..., 3].max()) == 255
+        assert float((rgba[..., :3].sum(axis=-1) > 0).mean()) > 0.99
+
+        h, w = rgba.shape[:2]
+        interior = _background_mask(rgba)[h // 5 : 4 * h // 5, w // 5 : 4 * w // 5]
+        assert int(interior.sum()) == 0, (
+            f"{int(interior.sum())} background-colored pixels inside the "
+            "terrain footprint indicate cracks between clipmap LOD rings"
+        )
+
+    def test_streaming_before_enable_raises(self):
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+        with pytest.raises(RuntimeError, match="height streaming not enabled"):
+            renderer.stream_height_tiles((0.0, 500.0, 0.0))
+        with pytest.raises(RuntimeError, match="height streaming not enabled"):
+            renderer.height_streaming_stats()
+
+
+@requires_terrain
+class TestHeightStreamingFlyThrough:
+    LOD = 2
+    TILE_RES = 64
+
+    def test_disable_height_streaming_clears_public_family_stats(self):
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+        renderer.enable_height_streaming(
+            terrain_extent_m=TERRAIN_SPAN_M,
+            ring_count=2,
+            ring_resolution=16,
+            lod=1,
+            tile_resolution=32,
+            max_in_flight=4,
+            pool_size=1,
+            dem=_steep_dem(64),
+            coarse_prefill=False,
+            max_resident_bytes=1024 * 1024,
+            max_gpu_visible_bytes=1024 * 1024,
+        )
+        renderer.stream_height_tiles((0.0, 500.0, 0.0), max_uploads=1)
+        active_stats = f3d.terrain_vt_stats()
+        assert active_stats["budget_bytes_height"] > 0
+        assert active_stats["height_pending_requests"] > 0
+
+        renderer.disable_height_streaming()
+        disabled_stats = f3d.terrain_vt_stats()
+        assert disabled_stats["resident_tiles_height"] == 0
+        assert disabled_stats["resident_bytes_height"] == 0
+        assert disabled_stats["budget_bytes_height"] == 0
+        assert disabled_stats["height_pending_requests"] == 0
+
+    def test_fly_through_streams_tiles_without_holes_and_bounded_memory(self, terrain_ibl):
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+
+        # Each virtual quadrant has a unique height band. Worker completion
+        # order assigns physical slots independently of virtual coordinates,
+        # so the converged render exercises real page-table indirection rather
+        # than accidentally relying on atlas slot order.
+        dem = _uniquely_valued_quadrant_dem(256)
+        overview = dem[::8, ::8].copy()  # coarse overview fed to each render
+        params = _make_params()
+        disabled_frame = _render_rgba(renderer, params, overview, terrain_ibl)
+        renderer.enable_height_streaming(
+            terrain_extent_m=TERRAIN_SPAN_M,
+            ring_count=4,
+            ring_resolution=32,
+            lod=self.LOD,
+            tile_resolution=self.TILE_RES,
+            max_in_flight=16,
+            pool_size=2,
+            dem=dem,
+            coarse_prefill=True,
+            max_resident_bytes=8 * 1024 * 1024,
+            max_gpu_visible_bytes=8 * 1024 * 1024,
+        )
+
+        tiles_axis = 1 << self.LOD
+        expected_leaf_bytes = tiles_axis * tiles_axis * self.TILE_RES * self.TILE_RES * 5
+        stats = renderer.height_streaming_stats()
+        # Startup performs no synchronous read or eager full-atlas prefill.
+        # The ordinary render-call overview remains bound until the root
+        # request completes on the bounded worker path.
+        assert stats["coarse_prefilled"] == 0
+        assert stats["resident_height_bytes"] == 0
+        assert stats["resident_height_bytes"] <= 8 * 1024 * 1024
+
+        coarse_frame = _render_rgba(renderer, params, overview, terrain_ibl)
+        assert np.array_equal(coarse_frame, disabled_frame), (
+            "the disabled page table must preserve the ordinary overview "
+            "render byte-for-byte until the asynchronous root is ready"
+        )
+        assert float((coarse_frame[..., :3].sum(axis=-1) > 0).mean()) > 0.99
+
+        # Fly across the region: tiles load asynchronously while frames render.
+        waypoints = np.linspace(-TERRAIN_SPAN_M * 0.35, TERRAIN_SPAN_M * 0.35, 8)
+        last_stats = stats
+        for step, wx in enumerate(waypoints):
+            last_stats = renderer.stream_height_tiles(
+                # One upload per step exercises every pending/partially-ready
+                # boundary state before a ring can be marked resident.
+                (float(wx), 500.0, float(wx) * 0.5), max_uploads=1
+            )
+            rgba = _render_rgba(renderer, params, overview, terrain_ibl)
+            h, w = rgba.shape[:2]
+            interior = _background_mask(rgba)[h // 5 : 4 * h // 5, w // 5 : 4 * w // 5]
+            assert int(interior.sum()) == 0, (
+                f"fly-through frame {step} shows {int(interior.sum())} hole pixels "
+                "while tile loads are in flight (coarse fallback must cover them)"
+            )
+            assert last_stats["resident_height_bytes"] <= expected_leaf_bytes
+            assert (
+                last_stats["gpu_visible_current_bytes"]
+                <= last_stats["gpu_visible_high_water_bytes"]
+            )
+            assert last_stats["gpu_visible_current_bytes"] < 512 * 1024 * 1024
+            assert last_stats["gpu_visible_high_water_bytes"] < 512 * 1024 * 1024
+
+        # Drain until fine residency converges; bounded, real async work.
+        for _ in range(200):
+            last_stats = renderer.stream_height_tiles(
+                (float(waypoints[-1]), 500.0, float(waypoints[-1]) * 0.5), max_uploads=16
+            )
+            if last_stats["converged"]:
+                break
+        assert last_stats["converged"], f"streaming never converged: {last_stats}"
+        assert last_stats["tiles_uploaded"] >= tiles_axis * tiles_axis
+        assert last_stats["resident_fine_tiles"] == tiles_axis * tiles_axis
+        assert last_stats["resident_height_bytes"] == expected_leaf_bytes
+        assert last_stats["coarse_prefilled"] == 1
+        assert last_stats["tiles_requested"] == last_stats["tiles_uploaded"], (
+            "a full max_in_flight upload batch must fit its exact staging admission; "
+            "deterministic size rejection would create extra retry generations"
+        )
+
+        # Fine streamed tiles must actually change rendered pixels vs the
+        # coarse prefill (the mosaic is the live height source).
+        fine_frame = _render_rgba(renderer, params, overview, terrain_ibl)
+        assert fine_frame.shape == coarse_frame.shape
+        assert not np.array_equal(fine_frame, coarse_frame), (
+            "converged fine-tile render is bit-identical to the coarse prefill "
+            "render; streamed tiles are not reaching the height texture"
+        )
+
+        # Beauty, AOV and offline entry points all build the same central
+        # terrain bind group. Prove that dynamic atlas geometry reaches the
+        # latter two paths too, then compare them with the disabled fallback.
+        material_set = f3d.MaterialSet.terrain_default()
+        _, dynamic_aov = renderer.render_with_aov(
+            material_set, terrain_ibl, params, overview
+        )
+        dynamic_depth = np.asarray(dynamic_aov.depth()).copy()
+        offline_settings = f3d.OfflineQualitySettings(
+            enabled=True, adaptive=False, batch_size=1
+        )
+        dynamic_offline = np.asarray(
+            f3d.render_offline(
+                renderer,
+                material_set,
+                terrain_ibl,
+                params,
+                overview,
+                settings=offline_settings,
+            ).frame.to_numpy()
+        )
+
+        # The clipmap mesh recenters on the streaming camera.
+        assert abs(last_stats["center"][0] - float(waypoints[-1])) < TERRAIN_SPAN_M * 0.05
+
+        renderer.disable_height_streaming()
+        _, fallback_aov = renderer.render_with_aov(
+            material_set, terrain_ibl, params, overview
+        )
+        fallback_offline = np.asarray(
+            f3d.render_offline(
+                renderer,
+                material_set,
+                terrain_ibl,
+                params,
+                overview,
+                settings=offline_settings,
+            ).frame.to_numpy()
+        )
+        assert not np.array_equal(dynamic_depth, np.asarray(fallback_aov.depth()))
+        assert not np.array_equal(dynamic_offline, fallback_offline)
+        disabled_stats = f3d.terrain_vt_stats()
+        assert disabled_stats["resident_tiles_height"] == 0
+        assert disabled_stats["resident_bytes_height"] == 0
+        assert disabled_stats["budget_bytes_height"] == 0
+        assert disabled_stats["height_pending_requests"] == 0
+        with pytest.raises(RuntimeError, match="height streaming not enabled"):
+            renderer.height_streaming_stats()
+
+    def test_regional_cog_mask_preserves_overview_in_all_render_paths(
+        self, terrain_ibl, tmp_path
+    ):
+        radius = 6_371_000.0
+        source = _write_quadrant_cog(
+            tmp_path / "regional-render.tif", height_scale=10_000.0
+        )
+        dataset = native.CogDataset(source.as_uri(), cache_size_mb=1)
+        session = f3d.Session(window=False)
+        renderer = f3d.TerrainRenderer(session)
+        overview = np.zeros((32, 32), dtype=np.float32)
+        params = _make_params(
+            camera_mode="clipmap:1:24:24:10:0.3:zup",
+            size_px=(96, 64),
+            theta_deg=0.0,
+            phi_deg=0.0,
+            cam_radius=1_200_000.0,
+            z_scale=50.0,
+            terrain_span=10_000_000.0,
+            cam_target=(0.0, 0.0, -1_200_000.0),
+            culling="none",
+        )
+        material_set = f3d.MaterialSet.terrain_default()
+        offline_settings = f3d.OfflineQualitySettings(
+            enabled=True, adaptive=False, batch_size=1
+        )
+
+        renderer.enable_height_streaming_cog_globe(
+            dataset,
+            terrain_extent_m=1_200_000.0,
+            ring_count=1,
+            ring_resolution=24,
+            lod=0,
+            tile_resolution=32,
+            max_in_flight=2,
+            pool_size=1,
+            coarse_prefill=False,
+            max_resident_bytes=8 * 1024 * 1024,
+            max_gpu_visible_bytes=8 * 1024 * 1024,
+        )
+        # Before the first drain, the globe mesh is already active but the
+        # page table is disabled; every path must use the caller's overview.
+        fallback_beauty = _render_rgba(renderer, params, overview, terrain_ibl)
+        _, fallback_aov = renderer.render_with_aov(
+            material_set, terrain_ibl, params, overview
+        )
+        fallback_depth = np.asarray(fallback_aov.depth()).copy()
+        fallback_offline = np.asarray(
+            f3d.render_offline(
+                renderer,
+                material_set,
+                terrain_ibl,
+                params,
+                overview,
+                settings=offline_settings,
+            ).frame.to_numpy()
+        )
+
+        stats = renderer.height_streaming_stats()
+        for _ in range(400):
+            stats = renderer.stream_height_tiles_globe(
+                (radius + 1_200_000.0, 0.0, 0.0), max_uploads=2
+            )
+            if stats["coarse_prefilled"]:
+                break
+            time.sleep(0.002)
+        assert stats["coarse_prefilled"] == 1, stats
+
+        dynamic_beauty = _render_rgba(renderer, params, overview, terrain_ibl)
+        _, dynamic_aov = renderer.render_with_aov(
+            material_set, terrain_ibl, params, overview
+        )
+        dynamic_depth = np.asarray(dynamic_aov.depth()).copy()
+        dynamic_offline = np.asarray(
+            f3d.render_offline(
+                renderer,
+                material_set,
+                terrain_ibl,
+                params,
+                overview,
+                settings=offline_settings,
+            ).frame.to_numpy()
+        )
+
+        # The regional source covers the northwest global quadrant around the
+        # lon=0/lat=0 anchor. Exact-equal terrain pixels prove the coverage
+        # mask kept the ordinary overview outside that quadrant; changed
+        # pixels prove streamed heights were used inside it.
+        terrain_pixels = np.isfinite(fallback_depth) & (fallback_depth < 0.999999)
+        assert np.any(terrain_pixels), "globe terrain did not reach the AOV depth target"
+        beauty_equal = np.all(dynamic_beauty == fallback_beauty, axis=-1)
+        assert np.any(terrain_pixels & ~beauty_equal), stats
+        assert np.any(terrain_pixels & beauty_equal)
+        depth_equal = dynamic_depth == fallback_depth
+        assert np.any(terrain_pixels & ~depth_equal)
+        assert np.any(terrain_pixels & depth_equal)
+        offline_equal = np.all(dynamic_offline == fallback_offline, axis=-1)
+        assert np.any(terrain_pixels & ~offline_equal)
+        assert np.any(terrain_pixels & offline_equal)
+        renderer.disable_height_streaming()

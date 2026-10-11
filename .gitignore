@@ -1,5 +1,460 @@
+# AI files
+.claude
+!.claude/
+.claude/*
+!.claude/rules/
+.claude/rules/*
+!.claude/rules/rust-core.md
+!.claude/rules/build-and-ci.md
+docs/prompt.md
+CLAUDE.md
+AGENTS.md
+
+# Git worktrees
+.worktrees/
+
+# License signing keys (NEVER commit private keys)
+forge3d_license.key
+*.key
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[codz]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.agent
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.DS_Store
+
+# Local outputs and diagnostics
+out/
+diag_out/
+cover/
+tmp/
+.worktrees/
+.codex/
+codex-review/
+codex-gis-g002*-review.zip
+g-002*-review-*.zip
+logs/*-audit.json
+logs/mcp-puppeteer-*.log.gz
+specs/
+!specs/
+specs/*
+!specs/001-diagnostics-support-matrices/
+specs/001-diagnostics-support-matrices/*
+!specs/001-diagnostics-support-matrices/tasks.md
+output/
+logs/
+tests/artifacts/
+orbis-artifacts-*/
+wheel-extract-*/
+docs/*audit*.md
+docs/*prompt*.md
+docs/**/*audit*.md
+docs/**/*prompt*.md
+*.pdb
+
+# Generated agent docs and review packs
+docs/audits/*
+!docs/audits/fable5-moonshots/
+docs/audits/fable5-moonshots/*
+!docs/audits/fable5-moonshots/14-censor-implementation-audit.md
+docs/prompts/
+docs/perf/
+docs/fable-prompt-library.md
+docs/superpowers/plans/2026-07-*.md
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+#poetry.toml
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
+#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
+#pdm.lock
+#pdm.toml
+.pdm-python
+.pdm-build/
+
+# pixi
+#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
+#pixi.lock
+#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
+#   in the .venv directory. It is recommended not to include this directory in version control.
+.pixi
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+# Abstra
+# Abstra is an AI-powered process automation framework.
+# Ignore directories containing user credentials, local state, and settings.
+# Learn more at https://abstra.io/docs
+.abstra/
+
+# Visual Studio Code
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  you could uncomment the following to ignore the entire vscode folder
+# .vscode/
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Cursor
+#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
+#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
+.forge3d-local/
+out/
+diag_out/
+#  refer to https://docs.cursor.com/context/ignore-files
+.cursorignore
+.cursorindexingignore
+
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+
+# Vulkan Forge specific
+/target
+/dist
+/build
+*.egg-info
+__pycache__/
+/.venv
+*.pyd
+
+# Generated outputs and artifacts
 *.png
-!docs/assets/*.png
-.venv/
+*.jpg
+*.jpeg
+*.tiff
+*.bmp
+*.exr
+*.hdr
+
+# Whitelist doc/gallery images that must be in the repo
+!docs/assets/highres.png
+!tests/golden/
+!tests/golden/terrain/
+!tests/golden/terrain/*.png
+!tests/golden/helios/
+!tests/golden/helios/*.png
+!tests/golden/viewshed/
+!tests/golden/viewshed/*.png
+!tests/golden/viewshed/PROVENANCE.md
+!tests/golden/recipes/
+!tests/golden/recipes/*.png
+!tests/golden/presets/
+!tests/golden/presets/*.png
+!tests/golden/atmosphere/
+!tests/golden/atmosphere/*.png
+!tests/golden/splat_fusion/
+!tests/golden/splat_fusion/*.png
+!python/forge3d/data/fonts/
+!python/forge3d/data/fonts/*.png
+!docs/gallery/images/*.png
+!docs/gallery/images/*.jpg
+!docs/gallery/thumbs/*.png
+!docs/gallery/thumbs/*.jpg
+!docs/tutorials/images/*.png
+!docs/tutorials/images/*.jpg
+tests/golden/adjudication/
+!tests/golden/adjudication/
+tests/golden/adjudication/*
+!tests/golden/adjudication/pt_reference.png
+!tests/golden/adjudication/raster_reference.png
+tests/golden/hybrid_terrain/
+!tests/golden/hybrid_terrain/
+tests/golden/hybrid_terrain/*
+!tests/golden/hybrid_terrain/mini_dem_reference.png
+!tests/fixtures/provenance/*.png
+tests/golden/labels/*.png
+tests/golden/labels/*.jpg
+tests/golden/labels/*.jpeg
+tests/golden/labels/*.webp
+tests/goldens/*
+!tests/goldens/determinism/
+tests/goldens/determinism/*
+!tests/goldens/determinism/*.sha256
+/out/
+/diag_out/
+/artifacts/
+/.benchmarks/
+build.log
+test_output.json
+*.log
+
+# Rust/Cargo specific
+Cargo.lock  # Keep for applications, ignore for libraries - this is an app so keep it
+.cargo/
+!.cargo/
+!.cargo/config.toml
+
+# maturin build artifacts
+*.whl
+*.tar.gz
+.maturin/
+
+# IDE and editor files
+.vscode/settings.json
+.vscode/launch.json
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+out/
+diag_out/
+*.exr
+temp/
+*.tmp
+*.temp
+.codex_tmp/
+
+# Profiling and performance data
+*.prof
+perf.data*
+flamegraph*.svg
+
+# Documentation builds
+/docs/_build/
+/docs/build/
+
+# Mesh BVH artifacts and test outputs (Task A3)
+*.bvh
+*.mesh
+*_bvh.json
+*_mesh.json
+mesh_test_*.png
+bvh_test_*.png
+mesh_render_*.png
+
+out/
+
+diag_out/
+# ./ .gitignore
+# Ignore generated outputs for examples and tests.
+# Exists to keep artifacts out of version control per task instructions.
+# RELEVANT FILES:examples/textured_sphere.py,examples/textured_quad_gltf_like.py,README.md
+
+out/
+reports/
+examples/output/
+examples/*
+examples/.cache/
+examples/out/
+examples/output/
+examples/**/*.py
+!examples/moon_south_pole.py
+!examples/orbis_swiss_alps_descent.py
+!examples/mapscene_thematic_rasters.py
+!examples/vector_line_drape.py
+tests/test_*example*.py
+tests/test_*examples*.py
+.superpowers/
+scripts/*
+!scripts/aether_acceptance_evidence.py
+!scripts/summarize_m06_evidence.py
+!scripts/check_anamnesis_portability.py
+!scripts/run_dupla_proof.py
+!scripts/tessella_evidence_report.py
+!scripts/tessella_evidence_contract.py
+!scripts/tessella_evidence_provenance.py
+!scripts/tessella_evidence_thresholds.py
+!scripts/substratia_evidence_report.py
+!scripts/write_orbis_evidence.py
+!scripts/helios_evidence_report.py
+!scripts/run_nvidia_visual_acceptance.py
+!scripts/run_nvidia_determinism_acceptance.py
+!scripts/run_browser_probe.py
+
+# forge3d outputs (A13) 
+out/
+diag_out/
+
+# Generated outputs and diagnostics
+out/
+diag_out/
+
+# R9 audit: ensure docs and pytest artifacts ignored
+docs/_build/
+.pytest_cache/
+.pytest-temp-root/
+.pytest-tmp/
+
+# Large data files
+landuse/landuse/glad_cropland_2019.tif
+
+# OBLIQUA proof fixtures, examples, and compatibility reference
+!examples/obliqua_analytic_camera_fixture.py
+!examples/obliqua_se_europe_fixture.py
+!examples/southeast_europe_population_pt_native.py
+!examples/swiss_landcover_pt_oblique.py
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/map-maker/
+.claude/skills/map-maker/*
+!.claude/skills/map-maker/references/
+.claude/skills/map-maker/references/*
+!.claude/skills/map-maker/references/recipes.md
+
+# Datasets de ejemplo de otros paises, no relacionados a Colombia (reducir cuota LFS)
+assets/tif/switzerland_land_cover.tif
+assets/tif/Bryce_Canyon.tif

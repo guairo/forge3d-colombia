@@ -1,0 +1,445 @@
+//! M1: Accumulation AA infrastructure for offline terrain rendering
+//!
+//! Provides HDR accumulation buffer and deterministic jitter sequences
+//! for high-quality antialiasing in offline renders.
+//!
+//! RELEVANT FILES: src/terrain/renderer.rs, src/terrain/camera.rs
+
+use crate::core::error::RenderResult;
+use crate::core::resource_tracker::{tracked_create_texture, TrackedTexture};
+use wgpu::{
+    CommandEncoder, Device, Extent3d, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages, TextureView, TextureViewDescriptor,
+};
+
+const SPLITMIX64_GAMMA: u64 = 0x9E3779B97F4A7C15;
+
+fn splitmix64_finalize(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D049BB133111EB);
+    value ^ (value >> 31)
+}
+
+/// Per-frame seed. `base_seed` is mixed on its own before `frame_index` is
+/// combined, so a flythrough's seeds are not a shifted copy of a neighbouring
+/// base seed's (a plain `base_seed + frame_index` makes
+/// `frame_seed(b, i) == frame_seed(b + 1, i - 1)`).
+pub fn frame_seed(base_seed: u64, frame_index: u64) -> u64 {
+    let base = splitmix64_finalize(base_seed.wrapping_add(SPLITMIX64_GAMMA));
+    splitmix64_finalize(base.wrapping_add(frame_index.wrapping_mul(SPLITMIX64_GAMMA)))
+}
+
+/// Accumulation AA configuration
+#[derive(Debug, Clone, Copy)]
+pub struct AccumulationConfig {
+    /// Number of samples to accumulate (1 = no AA, 16/64/256 typical)
+    pub samples: u32,
+    /// Optional seed for deterministic jitter (None = use default sequence)
+    pub seed: Option<u64>,
+}
+
+impl AccumulationConfig {
+    pub fn for_frame(samples: u32, base_seed: u64, frame_index: u64) -> Self {
+        Self {
+            samples,
+            seed: Some(frame_seed(base_seed, frame_index)),
+        }
+    }
+}
+
+impl Default for AccumulationConfig {
+    fn default() -> Self {
+        Self {
+            samples: 1,
+            seed: None,
+        }
+    }
+}
+
+/// HDR accumulation buffer for multi-sample averaging
+pub struct AccumulationBuffer {
+    /// Ping-pong HDR accumulation textures (Rgba32Float for precision)
+    textures: [TrackedTexture; 2],
+    /// Views for the ping-pong textures
+    views: [TextureView; 2],
+    /// Index of the texture containing the current accumulation result
+    current_index: usize,
+    /// Sample count buffer for averaging
+    pub sample_count: u32,
+    /// Buffer dimensions
+    pub width: u32,
+    pub height: u32,
+}
+
+impl AccumulationBuffer {
+    fn create_texture(
+        device: &Device,
+        label: &str,
+        width: u32,
+        height: u32,
+    ) -> RenderResult<(TrackedTexture, TextureView)> {
+        let texture = tracked_create_texture(
+            device,
+            &TextureDescriptor {
+                label: Some(label),
+                size: Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                // Use Rgba32Float for maximum precision during accumulation
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::RENDER_ATTACHMENT
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            },
+        )?;
+
+        let view = texture.create_view(&TextureViewDescriptor {
+            label: Some(&format!("{label}.view")),
+            ..Default::default()
+        });
+
+        Ok((texture, view))
+    }
+
+    /// Create a new accumulation buffer
+    pub fn new(device: &Device, width: u32, height: u32) -> RenderResult<Self> {
+        let (texture_a, view_a) =
+            Self::create_texture(device, "terrain.accumulation.texture_a", width, height)?;
+        let (texture_b, view_b) =
+            Self::create_texture(device, "terrain.accumulation.texture_b", width, height)?;
+
+        Ok(Self {
+            textures: [texture_a, texture_b],
+            views: [view_a, view_b],
+            current_index: 0,
+            sample_count: 0,
+            width,
+            height,
+        })
+    }
+
+    /// Reset accumulation for a new render
+    pub fn reset(&mut self) {
+        self.current_index = 0;
+        self.sample_count = 0;
+    }
+
+    /// Check if buffer needs resize
+    pub fn needs_resize(&self, width: u32, height: u32) -> bool {
+        self.width != width || self.height != height
+    }
+
+    /// Resize the accumulation buffer
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32) -> RenderResult<()> {
+        if !self.needs_resize(width, height) {
+            return Ok(());
+        }
+        *self = Self::new(device, width, height)?;
+        Ok(())
+    }
+
+    /// Clear the accumulation buffer
+    pub fn clear(&mut self, _encoder: &mut CommandEncoder) {
+        self.current_index = 0;
+        self.sample_count = 0;
+    }
+
+    /// Increment sample count after accumulation
+    pub fn increment_sample(&mut self) {
+        self.sample_count += 1;
+    }
+
+    /// Get current sample count
+    pub fn current_samples(&self) -> u32 {
+        self.sample_count
+    }
+
+    /// Texture containing the current accumulation result.
+    pub fn current_texture(&self) -> &Texture {
+        self.textures[self.current_index].inner()
+    }
+
+    /// View for the current accumulation texture.
+    pub fn current_view(&self) -> &TextureView {
+        &self.views[self.current_index]
+    }
+
+    /// Texture that should receive the next accumulation pass.
+    pub fn write_texture(&self) -> &Texture {
+        self.textures[1 - self.current_index].inner()
+    }
+
+    /// View for the texture that should receive the next accumulation pass.
+    pub fn write_view(&self) -> &TextureView {
+        &self.views[1 - self.current_index]
+    }
+
+    /// Swap ping-pong textures after a successful accumulation dispatch.
+    pub fn swap(&mut self) {
+        self.current_index = 1 - self.current_index;
+    }
+}
+
+/// Jitter sequence generator for subpixel camera offsets
+///
+/// Uses R2 quasi-random sequence (generalized golden ratio) for
+/// optimal low-discrepancy sampling, with optional Halton fallback.
+#[derive(Debug, Clone)]
+pub struct JitterSequence {
+    /// Precomputed jitter offsets (x, y) in [-0.5, 0.5] pixel space
+    offsets: Vec<(f32, f32)>,
+    /// Current index in sequence
+    current_index: usize,
+}
+
+impl JitterSequence {
+    /// Create a new jitter sequence with the given sample count
+    ///
+    /// Uses R2 sequence (generalized golden ratio) for optimal coverage
+    pub fn new(sample_count: u32, seed: Option<u64>) -> Self {
+        let offsets = Self::generate_r2_sequence(sample_count, seed);
+        Self {
+            offsets,
+            current_index: 0,
+        }
+    }
+
+    /// Generate R2 quasi-random sequence
+    ///
+    /// R2 sequence uses generalized golden ratio for 2D:
+    /// φ₂ = 1.32471795724... (plastic constant)
+    /// α₁ = 1/φ₂, α₂ = 1/φ₂²
+    fn generate_r2_sequence(count: u32, seed: Option<u64>) -> Vec<(f32, f32)> {
+        if count <= 1 {
+            return vec![(0.0, 0.0)];
+        }
+
+        // R2 sequence constants (generalized golden ratio for 2D)
+        // φ₂ ≈ 1.32471795724474602596 (plastic constant)
+        const PHI2: f64 = 1.32471795724474602596;
+        let alpha1 = 1.0 / PHI2;
+        let alpha2 = 1.0 / (PHI2 * PHI2);
+
+        let seed = seed.unwrap_or(0);
+        let phase_x = (seed >> 32) as f64 / 4294967296.0;
+        let phase_y = (seed as u32) as f64 / 4294967296.0;
+
+        let mut offsets = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            // R2 sequence formula: x_n = frac(i * α + phase)
+            let x = ((i as f64) * alpha1 + phase_x).fract() as f32;
+            let y = ((i as f64) * alpha2 + phase_y).fract() as f32;
+            // Map from [0,1] to [-0.5, 0.5] for pixel-center offset
+            offsets.push((x - 0.5, y - 0.5));
+        }
+
+        offsets
+    }
+
+    /// Compute Halton sequence value for given index and base
+    #[cfg(test)]
+    fn halton(mut index: u32, base: u32) -> f32 {
+        let mut result = 0.0f32;
+        let mut f = 1.0f32 / base as f32;
+
+        while index > 0 {
+            result += f * (index % base) as f32;
+            index /= base;
+            f /= base as f32;
+        }
+
+        result
+    }
+
+    /// Reset sequence to beginning
+    pub fn reset(&mut self) {
+        self.current_index = 0;
+    }
+
+    /// Get next jitter offset in sequence
+    pub fn next(&mut self) -> (f32, f32) {
+        let offset = self.offsets[self.current_index];
+        self.current_index = (self.current_index + 1) % self.offsets.len();
+        offset
+    }
+
+    /// Get jitter offset at specific index
+    pub fn get(&self, index: usize) -> (f32, f32) {
+        self.offsets[index % self.offsets.len()]
+    }
+
+    /// Get total number of samples in sequence
+    pub fn len(&self) -> usize {
+        self.offsets.len()
+    }
+
+    /// Check if sequence is empty
+    pub fn is_empty(&self) -> bool {
+        self.offsets.is_empty()
+    }
+}
+
+/// Apply subpixel jitter to projection matrix
+///
+/// Shifts the projection by a subpixel offset for accumulation AA.
+/// The jitter is in pixel space [-0.5, 0.5] and is converted to NDC.
+pub fn apply_jitter_to_projection(
+    proj: glam::Mat4,
+    jitter_x: f32,
+    jitter_y: f32,
+    width: u32,
+    height: u32,
+) -> glam::Mat4 {
+    // Convert pixel jitter to NDC space
+    // NDC range is [-1, 1], so pixel jitter needs to be scaled
+    let ndc_jitter_x = (2.0 * jitter_x) / width as f32;
+    let ndc_jitter_y = (2.0 * jitter_y) / height as f32;
+
+    // Apply the NDC shift by modifying row 0/1 with a multiple of row 3.
+    // In column-major storage that means offsetting column 2's x/y terms by
+    // the projection matrix's clip-w contribution (typically -1 for RH
+    // perspective projections).
+    let mut jittered = proj;
+    jittered.col_mut(2).x += ndc_jitter_x * proj.col(2).w;
+    jittered.col_mut(2).y += ndc_jitter_y * proj.col(2).w;
+
+    jittered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_jitter_sequence_r2() {
+        let seq = JitterSequence::new(16, None);
+        assert_eq!(seq.len(), 16);
+
+        // All offsets should be in [-0.5, 0.5]
+        for (x, y) in &seq.offsets {
+            assert!(*x >= -0.5 && *x <= 0.5, "x={} out of range", x);
+            assert!(*y >= -0.5 && *y <= 0.5, "y={} out of range", y);
+        }
+    }
+
+    #[test]
+    fn test_jitter_sequence_deterministic() {
+        let seq1 = JitterSequence::new(64, Some(42));
+        let seq2 = JitterSequence::new(64, Some(42));
+
+        for i in 0..64 {
+            assert_eq!(
+                seq1.get(i),
+                seq2.get(i),
+                "Sequence not deterministic at {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_jitter_sequence_single_sample() {
+        let seq = JitterSequence::new(1, None);
+        assert_eq!(seq.len(), 1);
+        assert_eq!(seq.get(0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_halton_sequence() {
+        // Halton(1, 2) = 0.5, Halton(1, 3) = 0.333...
+        let h2 = JitterSequence::halton(1, 2);
+        let h3 = JitterSequence::halton(1, 3);
+        assert!((h2 - 0.5).abs() < 0.001);
+        assert!((h3 - 0.333).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_accumulation_buffer_ping_pong_swaps() {
+        let instance = wgpu::Instance::default();
+        let Some(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            return;
+        };
+        let Ok((device, _)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+        else {
+            return;
+        };
+
+        let mut buffer = AccumulationBuffer::new(&device, 4, 4).expect("alloc");
+        let first = buffer.current_texture() as *const _;
+        let second = buffer.write_texture() as *const _;
+        assert_ne!(first, second);
+
+        buffer.swap();
+        assert_eq!(buffer.current_texture() as *const _, second);
+        assert_eq!(buffer.write_texture() as *const _, first);
+    }
+
+    #[test]
+    fn test_frame_seed_known_vectors() {
+        assert_eq!(frame_seed(0, 0), 0x4821_8226_ff3c_d4bf);
+        assert_eq!(frame_seed(0, 1), 0xa706_dd2f_4d19_7e6f);
+    }
+
+    #[test]
+    fn test_frame_seed_adjacent_uniqueness() {
+        // The label-fade interval is 256 frames: uniqueness across that span
+        // covers the longest window a label transition could alias jitter.
+        const SPAN: u64 = 256;
+        for base in [0u64, 1, u64::MAX / 2, u64::MAX - SPAN] {
+            let seeds: HashSet<u64> = (0..SPAN).map(|i| frame_seed(base, i)).collect();
+            assert_eq!(
+                seeds.len(),
+                SPAN as usize,
+                "adjacent frame seeds must be unique for base {base}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_base_seed_is_mixed_before_frame_index() {
+        for base in [0u64, 1, 7, u64::MAX / 2, u64::MAX - 1] {
+            for index in [1u64, 2, 17, 255] {
+                assert_ne!(
+                    frame_seed(base, index),
+                    frame_seed(base.wrapping_add(1), index - 1),
+                    "base {base} frame {index} replays base+1 frame-1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_for_frame_uses_derived_seed() {
+        let cfg = AccumulationConfig::for_frame(64, 7, 3);
+        assert_eq!(cfg.samples, 64);
+        assert_eq!(cfg.seed, Some(frame_seed(7, 3)));
+    }
+
+    #[test]
+    fn test_seeded_jitter_nonaliasing_adjacent_frames() {
+        let jit0 = JitterSequence::new(8, Some(frame_seed(0, 0)));
+        let jit1 = JitterSequence::new(8, Some(frame_seed(0, 1)));
+        let offsets0 = jit0.offsets.clone();
+        let offsets1 = jit1.offsets.clone();
+        assert_ne!(
+            offsets0, offsets1,
+            "adjacent frame seeds must produce distinct jitter phases"
+        );
+        assert_ne!(
+            offsets0[0], offsets1[0],
+            "first R2 offset must differ for adjacent frame seeds"
+        );
+    }
+}

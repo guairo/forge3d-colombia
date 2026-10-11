@@ -1,0 +1,2037 @@
+# python/forge3d/__init__.pyi
+# Type stubs for forge3d public Python API and fallbacks
+# Exists to mirror runtime signatures for IDEs and keep tooling aligned
+# RELEVANT FILES: python/forge3d/__init__.py, python/forge3d/config.py, src/render/params.rs, examples/terrain_demo.py
+# ruff: noqa: F401
+from __future__ import annotations
+from typing import Tuple, Optional, Sequence, Any, Dict, List, Literal, Mapping, Callable, NoReturn
+import os
+import numpy as np
+from . import gis
+from . import geo as geo
+from . import terrain as terrain
+from . import codec as codec
+from . import text as text
+from . import precision as precision
+from . import astro as astro
+from . import sky as sky
+from . import atmosphere as atmosphere
+from .atmosphere import AtmosphereSettings, SUN_ELEVATION_SWEEP_DEG
+from .precision import dd_harness, dd_jitter_demo, dd_selftest
+from .graticule import GraticuleSpec, generate_graticule
+from .legend import Legend, LegendConfig
+from .raster_style import RasterHeightSurfaceStyle as RasterHeightSurfaceStyle, CategoricalRasterStyle as CategoricalRasterStyle, BivariateRasterStyle as BivariateRasterStyle, RasterStyleResult as RasterStyleResult
+from .map_plate import BBox, MapPlate, MapPlateConfig, PlateRegion
+from .north_arrow import NorthArrow, NorthArrowConfig
+from .scale_bar import ScaleBar, ScaleBarConfig
+from .bundle import (
+    BUNDLE_VERSION,
+    BundleManifest,
+    CameraBookmark,
+    LoadedBundle,
+    RasterOverlaySpec,
+    ReviewLayer,
+    SceneBaseState,
+    SceneState,
+    SceneVariant,
+    TerrainMeta,
+    is_bundle,
+    load_bundle,
+    save_bundle,
+)
+from .buildings import validate_building_layer_support
+from .terrain_params import (
+    LightSettings,
+    IblSettings,
+    ShadowSettings,
+    FogSettings,
+    ReflectionSettings,
+    WaterSettings,
+    CloudSettings,
+    HeightAoSettings,
+    ScreenSpaceSettings,
+    SunVisibilitySettings,
+    ProbeSettings,
+    ReflectionProbeSettings,
+    DetailSettings,
+    MaterialNoiseSettings,
+    MaterialLayerSettings,
+    TriplanarSettings,
+    PomSettings,
+    LodSettings,
+    SamplingSettings,
+    ClampSettings,
+    TerrainRenderParams as TerrainRenderParamsConfig,
+    DenoiseSettings,
+    OfflineQualitySettings,
+    VTLayerFamily,
+    TerrainVTSettings,
+    validate_terrain_vt_support,
+    SkySettings,
+)
+from . import terrain as terrain
+from .terrain import VTStore as VTStore, open_vt_store as open_vt_store
+from .diagnostics import (
+    Diagnostic,
+    LayerSummary,
+    P2_FEATURE_DIAGNOSTIC_CODES,
+    REQUIRED_DIAGNOSTIC_CODES,
+    RenderFailurePolicy,
+    SeverityPolicy,
+    SupportMatrixEntry,
+    ValidationReport,
+    crs_mismatch_diagnostic,
+    estimated_gpu_memory_diagnostic,
+    memory_tracking_completeness_report,
+    experimental_feature_diagnostic,
+    label_rejection_summary_diagnostic,
+    missing_glyphs_diagnostic,
+    missing_texture_path_diagnostic,
+    missing_uvs_diagnostic,
+    placeholder_fallback_diagnostic,
+    pro_gated_path_diagnostic,
+    python_public_3dtiles_incomplete_diagnostic,
+    unavailable_cache_lod_stats_diagnostic,
+    unsupported_instancing_path_diagnostic,
+    unsupported_style_field_diagnostic,
+    unsupported_style_layer_type_diagnostic,
+    unsupported_texture_format_diagnostic,
+    validate_label_support,
+    vt_unsupported_family_diagnostic,
+)
+from .label_plan import (
+    AcceptedLabel,
+    KeepoutRegion,
+    LabelCandidate,
+    LabelPlan,
+    PriorityClass,
+    RejectedLabel,
+)
+from .map_scene import (
+    CompiledScenePlan as CompiledScenePlan,
+    FontAtlas as FontAtlas,
+    FontFallbackRange as FontFallbackRange,
+    LabelLayer as LabelLayer,
+    LightingPreset as LightingPreset,
+    MapFurnitureLayer as MapFurnitureLayer,
+    MapScene as MapScene,
+    MapSceneNativeUnavailable as MapSceneNativeUnavailable,
+    MapSceneTextLayoutError as MapSceneTextLayoutError,
+    BuildingLayer as MapSceneBuildingLayer,
+    OrbitCamera as OrbitCamera,
+    OutputSpec as OutputSpec,
+    PointCloudLayer as PointCloudLayer,
+    RasterOverlay as RasterOverlay,
+    ReproducibilityProfile as ReproducibilityProfile,
+    SceneRecipe as SceneRecipe,
+    TerrainSource as TerrainSource,
+    Tiles3DLayer as Tiles3DLayer,
+    TypographySettings as TypographySettings,
+    VectorOverlay as VectorOverlay,
+)
+from .recipe_manifest import recipe_manifest as recipe_manifest
+from .chronos import (
+    FlythroughManifest as FlythroughManifest,
+    render_flythrough as render_flythrough,
+)
+from .alignment import (
+    alignment_report,
+    alignment_residual,
+    reproject_dem_to_target,
+    resample_raster_to_grid,
+    transform_features as align_transform_features,
+    transform_geometry as align_transform_geometry,
+)
+from .text_atlas import (
+    BakedAtlas,
+    bake_atlas,
+    default_latin_atlas_paths,
+    load_atlas_metrics,
+    save_atlas,
+    validate_atlas_metrics,
+)
+from .style import (
+    label_layer_contracts_from_style,
+    validate_style_support,
+    vector_overlay_configs_from_style,
+)
+from .vector_line import VectorLineLayer as VectorLineLayer, VectorLineStyleError as VectorLineStyleError
+from . import smoke
+from . import verify
+from .path_tracing import ExperimentalSyntheticOutput, render_terrain_poster
+
+PathLikeStr = os.PathLike[str] | str
+
+__version__: str
+version: str
+
+def compress_dem(dem: Any, eps: float, progressive: bool = ...) -> bytes: ...
+def decompress_dem(data: bytes | bytearray | memoryview) -> tuple[np.ndarray, dict[str, Any]]: ...
+def verify_dem(data: bytes | bytearray | memoryview, source: Any | None = ...) -> dict[str, Any]: ...
+def encode_bc7_rgba8(rgba: bytes, width: int, height: int) -> bytes: ...
+def decode_bc7_rgba8(blocks: bytes, width: int, height: int) -> bytes: ...
+def encode_bc5_rg8(rg: bytes, width: int, height: int) -> bytes: ...
+def decode_bc5_rg8(blocks: bytes, width: int, height: int) -> bytes: ...
+def terrain_culling_stats() -> dict[str, int | float]: ...
+def terrain_visibility_stats() -> dict[str, int]: ...
+def terrain_vt_stats() -> dict[str, float]: ...
+def terrain_seam_stats() -> dict[str, int | float | bool]: ...
+
+# CENSOR: typed GPU-error exceptions (native when the extension is present,
+# pure-Python RuntimeError subclasses otherwise).
+class MemoryBudgetExceeded(RuntimeError): ...
+class DegradedCapability(RuntimeError): ...
+class TransformFailed(RuntimeError):
+    count: int
+    first_pixel: tuple[int, int] | None
+    first_reason: str | None
+
+class RendererConfig:
+    lighting: Dict[str, Any]
+    shading: Dict[str, Any]
+    shadows: Dict[str, Any]
+    gi: Dict[str, Any]
+    atmosphere: Dict[str, Any]
+    camera: Dict[str, Any]
+    sun: Dict[str, Any]
+    ibl: Dict[str, Any]
+    exaggeration: Optional[float]
+    brdf_override: Optional[str]
+    def __init__(
+        self,
+        *,
+        lighting: Dict[str, Any] | None = ...,
+        shading: Dict[str, Any] | None = ...,
+        shadows: Dict[str, Any] | None = ...,
+        gi: Dict[str, Any] | None = ...,
+        atmosphere: Dict[str, Any] | None = ...,
+        camera: Dict[str, Any] | None = ...,
+        sun: Dict[str, Any] | None = ...,
+        ibl: Dict[str, Any] | None = ...,
+        exaggeration: Optional[float] = ...,
+        brdf_override: Optional[str] = ...,
+    ) -> None: ...
+    def to_dict(self) -> Dict[str, Any]: ...
+    def copy(self) -> RendererConfig: ...
+    def validate(self) -> None: ...
+
+class Renderer:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        *,
+        config: RendererConfig | Mapping[str, Any] | PathLikeStr | None = ...,
+        **kwargs: Any,
+    ) -> None: ...
+    def info(self) -> str: ...
+    def render_triangle_rgba(self, *, certificate: bool | str | PathLikeStr = ..., cache: str | PathLikeStr | None = ...) -> np.ndarray: ...  # (H,W,4) uint8, C-contiguous
+    def render_triangle_png(self, path: PathLikeStr, *, certificate: bool | str | PathLikeStr = ..., cache: str | PathLikeStr | None = ...) -> None: ...
+    def get_config(self) -> Dict[str, Any]: ...
+    def set_lights(self, lights: Sequence[Mapping[str, Any]] | Mapping[str, Any]) -> None: ...
+    def set_msaa_samples(self, samples: int) -> int: ...
+    # Terrain helpers (subset)
+    def add_terrain(self, heightmap: np.ndarray, spacing: Tuple[float, float], exaggeration: float, colormap: str) -> None: ...
+    def terrain_stats(self) -> Tuple[float, float, float, float]: ...
+    def set_height_range(self, min: float, max: float) -> None: ...
+    def upload_height_r32f(self) -> None: ...
+    def read_full_height_texture(self) -> np.ndarray: ...
+
+class Scene:
+    def __init__(self, width: int, height: int, grid: int = ..., colormap: str = ...) -> None: ...
+
+    # --- Core rendering ---
+    def set_camera_look_at(self,
+        eye: Tuple[float, float, float],
+        target: Tuple[float, float, float],
+        up: Tuple[float, float, float],
+        fovy_deg: float, znear: float, zfar: float) -> None: ...
+    def set_height_from_r32f(self, height_r32f: np.ndarray) -> None: ...
+    def render_png(self, path: PathLikeStr, certificate: bool | str | PathLikeStr | None = ..., cache: str | PathLikeStr | None = ...) -> None: ...
+    def render_rgba(self, certificate: bool | str | PathLikeStr | None = ..., cache: str | PathLikeStr | None = ...) -> np.ndarray: ...  # (H,W,4) uint8, C-contiguous
+    def set_msaa_samples(self, samples: int) -> int: ...
+    def debug_uniforms_f32(self) -> np.ndarray: ...
+    def debug_lut_format(self) -> str: ...
+    def get_stats(self) -> Dict[str, Any]: ...
+
+    # --- AETHER spectral atmosphere ---
+    def set_atmosphere(
+        self,
+        turbidity: float = ...,
+        ozone_du: float = ...,
+        mie_g: float = ...,
+    ) -> None: ...
+    def clear_atmosphere(self) -> None: ...
+    def get_atmosphere_settings(self) -> Dict[str, Any]: ...
+
+    # --- SSAO ---
+    def ssao_enabled(self) -> bool: ...
+    def set_ssao_enabled(self, enabled: bool) -> bool: ...
+    def set_ssao_parameters(self, radius: float, intensity: float, bias: float = ...) -> None: ...
+    def get_ssao_parameters(self) -> Tuple[float, float, float]: ...
+
+    # --- SSGI ---
+    def enable_ssgi(self) -> None: ...
+    def disable_ssgi(self) -> None: ...
+    def is_ssgi_enabled(self) -> bool: ...
+    def set_ssgi_settings(self, settings: SSGISettings) -> None: ...
+    def get_ssgi_settings(self) -> Dict[str, Any]: ...
+
+    # --- SSR ---
+    def enable_ssr(self) -> None: ...
+    def disable_ssr(self) -> None: ...
+    def is_ssr_enabled(self) -> bool: ...
+    def set_ssr_settings(self, settings: SSRSettings) -> None: ...
+    def get_ssr_settings(self) -> Dict[str, Any]: ...
+
+    # --- Bloom (P1.2) ---
+    def enable_bloom(self) -> None: ...
+    def disable_bloom(self) -> None: ...
+    def is_bloom_enabled(self) -> bool: ...
+    def set_bloom_settings(
+        self,
+        threshold: float | None = ...,
+        softness: float | None = ...,
+        strength: float | None = ...,
+        radius: float | None = ...,
+    ) -> None: ...
+    def get_bloom_settings(self) -> Dict[str, Any]: ...
+
+    # --- Depth of Field ---
+    def enable_dof(self, quality: str | None = ...) -> None: ...
+    def disable_dof(self) -> None: ...
+    def dof_enabled(self) -> bool: ...
+    def set_dof_camera_params(self, aperture: float, focus_distance: float, focal_length: float) -> None: ...
+    def set_dof_f_stop(self, f_stop: float) -> None: ...
+    def set_dof_focus_distance(self, distance: float) -> None: ...
+    def set_dof_focal_length(self, focal_length: float) -> None: ...
+    def set_dof_bokeh_rotation(self, rotation: float) -> None: ...
+    def set_dof_transition_ranges(self, near_range: float, far_range: float) -> None: ...
+    def set_dof_coc_bias(self, bias: float) -> None: ...
+    def set_dof_method(self, method: Literal["gather", "separable"]) -> None: ...
+    def set_dof_debug_mode(self, mode: int) -> None: ...
+    def set_dof_show_coc(self, show: bool) -> None: ...
+    def get_dof_params(self) -> Tuple[float, float, float]: ...
+
+    # --- Reflections ---
+    def enable_reflections(self, quality: Literal["low", "medium", "high", "ultra"] | None = ...) -> None: ...
+    def disable_reflections(self) -> None: ...
+    def set_reflection_plane(self, normal: Tuple[float, float, float], point: Tuple[float, float, float], size: Tuple[float, float, float]) -> None: ...
+    def set_reflection_intensity(self, intensity: float) -> None: ...
+    def set_reflection_fresnel_power(self, power: float) -> None: ...
+    def set_reflection_distance_fade(self, start: float, end: float) -> None: ...
+    def set_reflection_debug_mode(self, mode: int) -> None: ...
+    def reflection_performance_info(self) -> Tuple[float, bool]: ...
+
+    # --- Cloud shadows ---
+    def enable_cloud_shadows(self, quality: Literal["low", "medium", "high", "ultra"] | None = ...) -> None: ...
+    def disable_cloud_shadows(self) -> None: ...
+    def is_cloud_shadows_enabled(self) -> bool: ...
+    def set_cloud_speed(self, speed_x: float, speed_y: float) -> None: ...
+    def set_cloud_scale(self, scale: float) -> None: ...
+    def set_cloud_density(self, density: float) -> None: ...
+    def set_cloud_coverage(self, coverage: float) -> None: ...
+    def set_cloud_shadow_intensity(self, intensity: float) -> None: ...
+    def set_cloud_shadow_softness(self, softness: float) -> None: ...
+    def set_cloud_wind(self, direction: float, strength: float) -> None: ...
+    def set_cloud_wind_vector(self, x: float, y: float, strength: float) -> None: ...
+    def set_cloud_noise_params(self, frequency: float, amplitude: float) -> None: ...
+    def get_cloud_params(self) -> Tuple[float, float, float, float]: ...
+
+    # --- Clouds (3D / volumetric) ---
+    def enable_clouds(self, quality: Literal["low", "medium", "high", "ultra"] | None = ...) -> None: ...
+    def disable_clouds(self) -> None: ...
+    def is_clouds_enabled(self) -> bool: ...
+    def set_cloud_render_mode(self, mode: Literal["billboard", "volumetric", "hybrid"]) -> None: ...
+    def update_cloud_animation(self, delta_time: float) -> None: ...
+    def get_clouds_params(self) -> Tuple[float, float, float, float]: ...
+    def set_cloud_animation_preset(self, preset_name: Literal["static", "gentle", "moderate", "stormy", "calm", "windy"] | str) -> None: ...
+    def set_cloud_debug_mode(self, mode: int) -> None: ...
+    def set_cloud_show_clouds_only(self, show: bool) -> None: ...
+
+    # --- Realtime clouds ---
+    def set_realtime_cloud_density(self, density: float) -> None: ...
+    def set_realtime_cloud_coverage(self, coverage: float) -> None: ...
+    def set_realtime_cloud_scale(self, scale: float) -> None: ...
+    def set_realtime_cloud_wind(self, direction_x: float, direction_y: float, strength: float) -> None: ...
+    def set_realtime_cloud_animation_preset(self, preset: str) -> None: ...
+    def update_realtime_cloud_animation(self, delta_time: float) -> None: ...
+
+    # --- Ground plane ---
+    def enable_ground_plane(self) -> None: ...
+    def disable_ground_plane(self) -> None: ...
+    def is_ground_plane_enabled(self) -> bool: ...
+    def set_ground_plane_mode(self, mode: Literal["disabled", "solid", "grid", "checkerboard"]) -> None: ...
+    def set_ground_plane_height(self, height: float) -> None: ...
+    def set_ground_plane_size(self, size: float) -> None: ...
+    def set_ground_plane_grid_spacing(self, major_spacing: float, minor_spacing: float) -> None: ...
+    def set_ground_plane_grid_width(self, major_width: float, minor_width: float) -> None: ...
+    def set_ground_plane_color(self, r: float, g: float, b: float, alpha: float) -> None: ...
+    def set_ground_plane_grid_colors(self, major_r: float, major_g: float, major_b: float, major_alpha: float, minor_r: float, minor_g: float, minor_b: float, minor_alpha: float) -> None: ...
+    def set_ground_plane_z_bias(self, z_bias: float) -> None: ...
+    def set_ground_plane_preset(self, preset: Literal["engineering", "architectural", "simple"]) -> None: ...
+    def get_ground_plane_params(self) -> Tuple[float, float, float, float]: ...
+
+    # --- Water surface ---
+    def enable_water_surface(self) -> None: ...
+    def disable_water_surface(self) -> None: ...
+    def is_water_surface_enabled(self) -> bool: ...
+    def set_water_surface_mode(self, mode: Literal["disabled", "transparent", "reflective", "animated"]) -> None: ...
+    def set_water_surface_height(self, height: float) -> None: ...
+    def set_water_surface_size(self, size: float) -> None: ...
+    def set_water_base_color(self, r: float, g: float, b: float) -> None: ...
+    def set_water_hue_shift(self, hue_shift: float) -> None: ...
+    def set_water_tint(self, r: float, g: float, b: float, strength: float) -> None: ...
+    def set_water_alpha(self, alpha: float) -> None: ...
+    def set_water_wave_params(self, amplitude: float, frequency: float, speed: float) -> None: ...
+    def set_water_flow_direction(self, direction_x: float, direction_y: float) -> None: ...
+    def set_water_lighting_params(self, specular_power: float, specular_intensity: float, fresnel_power: float) -> None: ...
+    def set_water_preset(self, preset: str) -> None: ...
+    def update_water_animation(self, delta_time: float) -> None: ...
+    def get_water_surface_params(self) -> Tuple[float, float, float, float]: ...
+    def enable_shoreline_foam(self) -> None: ...
+    def disable_shoreline_foam(self) -> None: ...
+    def set_shoreline_foam_params(self, width_px: float, intensity: float, noise_scale: float) -> None: ...
+    def set_water_mask(self, mask: np.ndarray) -> None: ...
+    def set_water_surface_debug_mode(self, mode: int) -> None: ...
+
+    # --- Soft light radius ---
+    def enable_soft_light_radius(self) -> None: ...
+    def disable_soft_light_radius(self) -> None: ...
+    def is_soft_light_radius_enabled(self) -> bool: ...
+    def set_soft_light_position(self, x: float, y: float, z: float) -> None: ...
+    def set_soft_light_intensity(self, intensity: float) -> None: ...
+    def set_soft_light_color(self, r: float, g: float, b: float) -> None: ...
+    def set_light_inner_radius(self, radius: float) -> None: ...
+    def set_light_outer_radius(self, radius: float) -> None: ...
+    def set_light_falloff_exponent(self, exponent: float) -> None: ...
+    def set_light_edge_softness(self, softness: float) -> None: ...
+    def set_light_falloff_mode(self, mode: Literal["linear", "quadratic", "cubic", "exponential"]) -> None: ...
+    def set_light_shadow_softness(self, softness: float) -> None: ...
+    def set_light_preset(self, preset: Literal["spotlight", "area_light", "ambient_light", "candle", "street_lamp"]) -> None: ...
+    def get_light_effective_range(self) -> float: ...
+    def light_affects_point(self, x: float, y: float, z: float) -> bool: ...
+
+    # --- Point & spot lights ---
+    def enable_point_spot_lights(self, max_lights: int | None = ...) -> None: ...
+    def disable_point_spot_lights(self) -> None: ...
+    def is_point_spot_lights_enabled(self) -> bool: ...
+    def add_point_light(self, x: float, y: float, z: float, r: float, g: float, b: float, intensity: float, range: float) -> int: ...
+    def add_spot_light(self, x: float, y: float, z: float, dir_x: float, dir_y: float, dir_z: float, r: float, g: float, b: float, intensity: float, range: float, inner_cone_deg: float, outer_cone_deg: float, penumbra_softness: float) -> int: ...
+    def add_light_preset(self, preset: str, x: float, y: float, z: float) -> int: ...
+    def remove_light(self, light_id: int) -> bool: ...
+    def clear_all_lights(self) -> None: ...
+    def set_light_position(self, light_id: int, x: float, y: float, z: float) -> None: ...
+    def set_light_direction(self, light_id: int, dir_x: float, dir_y: float, dir_z: float) -> None: ...
+    def set_light_color(self, light_id: int, r: float, g: float, b: float) -> None: ...
+    def set_light_intensity(self, light_id: int, intensity: float) -> None: ...
+    def set_light_range(self, light_id: int, range: float) -> None: ...
+    def set_spot_light_cone(self, light_id: int, inner_cone_deg: float, outer_cone_deg: float) -> None: ...
+    def set_spot_light_penumbra(self, light_id: int, softness: float) -> None: ...
+    def set_light_shadows(self, light_id: int, enabled: bool) -> None: ...
+    def set_ambient_lighting(self, r: float, g: float, b: float, intensity: float) -> None: ...
+    def set_shadow_quality(self, quality: Literal["off", "low", "medium", "high"]) -> None: ...
+    def set_lighting_debug_mode(self, mode: Literal["normal", "show_light_bounds", "show_shadows"]) -> None: ...
+    def get_light_count(self) -> int: ...
+    def check_light_affects_point(self, light_id: int, x: float, y: float, z: float) -> bool: ...
+
+    # --- LTC rect area lights ---
+    def enable_ltc_rect_area_lights(self, max_lights: int | None = ...) -> None: ...
+    def disable_ltc_rect_area_lights(self) -> None: ...
+    def is_ltc_rect_area_lights_enabled(self) -> bool: ...
+    def add_rect_area_light(self, x: float, y: float, z: float, width: float, height: float, r: float, g: float, b: float, intensity: float) -> int: ...
+    def add_custom_rect_area_light(self, position: Tuple[float, float, float], right_vec: Tuple[float, float, float], up_vec: Tuple[float, float, float], width: float, height: float, r: float, g: float, b: float, intensity: float, two_sided: bool | None = ...) -> int: ...
+    def remove_rect_area_light(self, light_id: int) -> None: ...
+    def update_rect_area_light(self, light_id: int, x: float, y: float, z: float, width: float, height: float, r: float, g: float, b: float, intensity: float) -> None: ...
+    def get_rect_area_light_count(self) -> int: ...
+    def set_ltc_global_intensity(self, intensity: float) -> None: ...
+    def set_ltc_approximation_enabled(self, enabled: bool) -> None: ...
+    def get_ltc_uniforms(self) -> Tuple[int, float, bool]: ...
+
+    # --- IBL (Image-Based Lighting) ---
+    def enable_ibl(self, quality: Literal["low", "medium", "high", "ultra"] | None = ...) -> None: ...
+    def disable_ibl(self) -> None: ...
+    def is_ibl_enabled(self) -> bool: ...
+    def set_ibl_quality(self, quality: Literal["low", "medium", "high", "ultra"]) -> None: ...
+    def load_environment_map(self, hdr_data: Sequence[float], width: int, height: int) -> None: ...
+    def generate_ibl_textures(self) -> None: ...
+    def get_ibl_quality(self) -> str: ...
+    def is_ibl_initialized(self) -> bool: ...
+    def get_ibl_texture_info(self) -> Tuple[str, str, str]: ...
+    def test_ibl_material(self, metallic: float, roughness: float, r: float, g: float, b: float) -> Tuple[float, float, float]: ...
+    def sample_brdf_lut(self, n_dot_v: float, roughness: float) -> Tuple[float, float]: ...
+
+    # --- OIT (Order-Independent Transparency) ---
+    def enable_oit(self, mode: Literal["standard", "wboit", "dual_source", "auto"] | None = ...) -> None: ...
+    def disable_oit(self) -> None: ...
+    def is_oit_enabled(self) -> bool: ...
+    def get_oit_mode(self) -> str: ...
+
+    # --- Dual-source OIT ---
+    def enable_dual_source_oit(self, mode: str | None = ..., quality: str | None = ...) -> None: ...
+    def disable_dual_source_oit(self) -> None: ...
+    def is_dual_source_oit_enabled(self) -> bool: ...
+    def set_dual_source_oit_mode(self, mode: Literal["dual_source", "wboit_fallback", "automatic", "disabled"]) -> None: ...
+    def get_dual_source_oit_mode(self) -> str: ...
+    def set_dual_source_oit_quality(self, quality: Literal["low", "medium", "high", "ultra"]) -> None: ...
+    def get_dual_source_oit_quality(self) -> str: ...
+    def is_dual_source_supported(self) -> bool: ...
+    def get_dual_source_oit_stats(self) -> Tuple[int, int, int, float, float, float]: ...
+    def set_dual_source_oit_params(self, alpha_correction: float, depth_weight_scale: float, max_fragments: float, premultiply_factor: float) -> None: ...
+
+    # --- Native overlays ---
+    def enable_native_overlays(self) -> None: ...
+    def disable_native_overlays(self) -> None: ...
+    def set_native_overlay_alpha(self, alpha: float) -> None: ...
+    def set_native_altitude_overlay_enabled(self, enabled: bool) -> None: ...
+    def set_native_overlay_texture(self, image: np.ndarray) -> None: ...
+    def set_raster_overlay(self, image: np.ndarray, alpha: float | None = ..., offset_xy: Tuple[int, int] | None = ..., scale: float | None = ...) -> None: ...
+    def disable_overlay(self) -> None: ...
+    def set_overlay_alpha(self, alpha: float) -> None: ...
+
+    # --- Altitude overlay and contours ---
+    def enable_altitude_overlay(self, alpha: float | None = ...) -> None: ...
+    def disable_altitude_overlay(self) -> None: ...
+    def set_altitude_overlay_alpha(self, alpha: float) -> None: ...
+    def enable_gpu_contours(self, interval: float, thickness_mul: float | None = ..., r: float | None = ..., g: float | None = ..., b: float | None = ..., a: float | None = ...) -> None: ...
+    def disable_gpu_contours(self) -> None: ...
+
+    # --- Terrain toggle ---
+    def enable_terrain(self) -> None: ...
+    def disable_terrain(self) -> None: ...
+
+    # --- Native text overlay ---
+    def enable_native_text(self) -> None: ...
+    def disable_native_text(self) -> None: ...
+    def set_native_text_alpha(self, alpha: float) -> None: ...
+    def add_native_text_rect(self, x: float, y: float, w: float, h: float, r: float, g: float, b: float, a: float) -> None: ...
+    def add_native_text_rect_uv(self, x: float, y: float, w: float, h: float, u0: float, v0: float, u1: float, v1: float, r: float, g: float, b: float, a: float) -> None: ...
+    def add_native_text_rect_uv_halo(self, x: float, y: float, w: float, h: float, u0: float, v0: float, u1: float, v1: float, r: float, g: float, b: float, a: float, halo_r: float, halo_g: float, halo_b: float, halo_a: float, halo_width: float) -> None: ...
+    def clear_native_text(self) -> None: ...
+    def set_native_text_atlas(self, atlas: np.ndarray, channels: int | None = ..., smoothing: float | None = ...) -> None: ...
+
+    # --- 3D text meshes ---
+    def enable_text_meshes(self) -> None: ...
+    def disable_text_meshes(self) -> None: ...
+    def clear_text_meshes(self) -> None: ...
+    def add_text_mesh(
+        self,
+        text: str,
+        font: Any,
+        size_px: float | None = ...,
+        depth: float | None = ...,
+        position: Tuple[float, float, float] | None = ...,
+        color: Tuple[float, float, float, float] | None = ...,
+        rotation_deg: Tuple[float, float, float] | None = ...,
+        scale: float | None = ...,
+        scale_xyz: Tuple[float, float, float] | None = ...,
+        light_dir: Tuple[float, float, float] | None = ...,
+        light_intensity: float | None = ...,
+        bevel_strength: float | None = ...,
+        bevel_segments: int | None = ...,
+    ) -> None: ...
+    def get_text_mesh_stats(self) -> Tuple[int, int, int]: ...
+    def update_text_mesh_transform(self, index: int, position: Tuple[float, float, float], rotation_deg: Tuple[float, float, float], scale: float | None = ..., scale_xyz: Tuple[float, float, float] | None = ...) -> None: ...
+    def update_text_mesh_color(self, index: int, r: float, g: float, b: float, a: float) -> None: ...
+    def update_text_mesh_light(self, index: int, dx: float, dy: float, dz: float, intensity: float) -> None: ...
+    def set_text_mesh_material(self, index: int, metallic: float, roughness: float) -> None: ...
+
+class Session:
+    window: bool
+    def __init__(self, window: bool = ..., backend: Optional[str] = ...) -> None: ...
+    def info(self) -> str: ...
+    @property
+    def adapter_name(self) -> str: ...
+    @property
+    def backend(self) -> str: ...
+    @property
+    def device_type(self) -> str: ...
+
+class IBL:
+    intensity: float
+    rotation_deg: float
+    @staticmethod
+    def from_hdr(
+        path: PathLikeStr,
+        intensity: float = ...,
+        rotate_deg: float = ...,
+        quality: str = ...,
+    ) -> "IBL": ...
+    def set_intensity(self, value: float) -> None: ...
+    def set_rotation_deg(self, value: float) -> None: ...
+    def quality(self) -> str: ...
+    def dimensions(self) -> Optional[Tuple[int, int]]: ...
+    def path(self) -> str: ...
+    def base_resolution(self) -> int: ...
+    def set_base_resolution(self, resolution: int) -> None: ...
+    def set_cache_dir(self, path: PathLikeStr | None = ...) -> None: ...
+    def cache_dir(self) -> Optional[str]: ...
+
+class Colormap1D:
+    domain: Tuple[float, float]
+    @staticmethod
+    def from_stops(
+        stops: Sequence[Tuple[float, str]],
+        domain: Tuple[float, float],
+    ) -> Colormap1D: ...
+
+class OverlayLayer:
+    strength: float
+    offset: float
+    blend_mode: str
+    domain: Tuple[float, float]
+    @staticmethod
+    def from_raster_rgba(rgba: np.ndarray, strength: float = ...) -> OverlayLayer: ...
+    @staticmethod
+    def from_colormap1d(
+        colormap: Colormap1D,
+        strength: float = ...,
+        offset: float = ...,
+        blend_mode: str = ...,
+        domain: Tuple[float, float] = ...,
+    ) -> OverlayLayer: ...
+    @property
+    def colormap(self) -> Optional[Colormap1D]: ...
+    @property
+    def kind(self) -> str: ...
+
+class TerrainRenderParams:
+    size_px: Tuple[int, int]
+    render_scale: float
+    msaa_samples: int
+    z_scale: float
+    cam_target: Tuple[float, float, float]
+    cam_radius: float
+    cam_phi_deg: float
+    cam_theta_deg: float
+    cam_gamma_deg: float
+    fov_y_deg: float
+    clip: Tuple[float, float]
+    exposure: float
+    gamma: float
+    albedo_mode: str
+    colormap_strength: float
+    hue_variation_strength: float
+    material_slope_bias: float
+    material_layer_centers: Optional[Tuple[float, ...]]
+    nodata_height_below: Optional[float]
+    overlays: Sequence[OverlayLayer]
+    terrain_data_revision: Optional[int]
+    material_map_paths: Dict[str, str]
+    culling: Literal["none", "frustum", "hzb_two_phase"]
+    shading: Literal["forward", "visibility"]
+    vt_store: Optional[VTStore | str]
+    prefetch_horizon_ms: float
+    vt_upload_budget_bytes: int
+    def __init__(self, params: Any) -> None: ...
+    @property
+    def light(self) -> Any: ...
+    @property
+    def ibl(self) -> Any: ...
+    @property
+    def shadows(self) -> Any: ...
+    @property
+    def triplanar(self) -> Any: ...
+    @property
+    def pom(self) -> Any: ...
+    @property
+    def lod(self) -> Any: ...
+    @property
+    def sampling(self) -> Any: ...
+    @property
+    def clamp(self) -> Any: ...
+    @property
+    def python_object(self) -> Any: ...
+
+class Frame:
+    width: int
+    height: int
+    format: str
+    def save(self, path: PathLikeStr) -> None: ...
+    def to_numpy(self) -> np.ndarray: ...
+    def size(self) -> Tuple[int, int]: ...
+
+class HdrFrame:
+    def save(self, path: PathLikeStr) -> None: ...
+    def to_numpy_f32(self) -> np.ndarray: ...
+    @property
+    def size(self) -> Tuple[int, int]: ...
+
+class OfflineBatchResult:
+    @property
+    def total_samples(self) -> int: ...
+    @property
+    def batch_time_ms(self) -> float: ...
+    def __getitem__(self, key: str) -> Any: ...
+    def as_dict(self) -> Dict[str, Any]: ...
+
+class OfflineMetrics:
+    @property
+    def total_samples(self) -> int: ...
+    @property
+    def mean_delta(self) -> float: ...
+    @property
+    def p95_delta(self) -> float: ...
+    @property
+    def max_tile_delta(self) -> float: ...
+    @property
+    def converged_tile_ratio(self) -> float: ...
+    def __getitem__(self, key: str) -> Any: ...
+    def as_dict(self) -> Dict[str, Any]: ...
+
+class AovFrame:
+    def size(self) -> Tuple[int, int]: ...
+    @property
+    def has_albedo(self) -> bool: ...
+    @property
+    def has_normal(self) -> bool: ...
+    @property
+    def has_depth(self) -> bool: ...
+    @property
+    def has_source_id(self) -> bool: ...
+    def albedo(self) -> np.ndarray: ...
+    def normal(self) -> np.ndarray: ...
+    def depth(self) -> np.ndarray: ...
+    def source_id(self) -> np.ndarray: ...
+    def save_albedo(self, path: PathLikeStr) -> None: ...
+    def save_normal(self, path: PathLikeStr) -> None: ...
+    def save_depth(self, path: PathLikeStr) -> None: ...
+    def save_all(self, output_dir: PathLikeStr, base_name: str) -> None: ...
+    def save_exr(self, path: PathLikeStr, beauty_frame: Frame) -> None: ...
+
+class CameraKeyframe:
+    @property
+    def time(self) -> float: ...
+    @property
+    def phi_deg(self) -> float: ...
+    @property
+    def theta_deg(self) -> float: ...
+    @property
+    def radius(self) -> float: ...
+    @property
+    def fov_deg(self) -> float: ...
+    @property
+    def target(self) -> Optional[Tuple[float, float, float]]: ...
+    def __init__(
+        self,
+        time: float,
+        phi: float,
+        theta: float,
+        radius: float,
+        fov: float,
+        target: Optional[Tuple[float, float, float]] = ...,
+    ) -> None: ...
+
+class CameraState:
+    @property
+    def phi_deg(self) -> float: ...
+    @property
+    def theta_deg(self) -> float: ...
+    @property
+    def radius(self) -> float: ...
+    @property
+    def fov_deg(self) -> float: ...
+    @property
+    def target(self) -> Optional[Tuple[float, float, float]]: ...
+
+class CameraAnimation:
+    @property
+    def duration(self) -> float: ...
+    @property
+    def keyframe_count(self) -> int: ...
+    def __init__(self) -> None: ...
+    def add_keyframe(
+        self,
+        time: float,
+        phi: float,
+        theta: float,
+        radius: float,
+        fov: float,
+        target: Optional[Tuple[float, float, float]] = ...,
+    ) -> None: ...
+    def get_keyframes(self) -> list[CameraKeyframe]: ...
+    def replace_keyframes(self, keyframes: Sequence[CameraKeyframe]) -> None: ...
+    def clear_keyframes(self) -> None: ...
+    def get_frame_count(self, fps: int) -> int: ...
+    def evaluate(self, time: float) -> Optional[CameraState]: ...
+
+class GlobeMetrics:
+    @property
+    def max_vertex_jitter_px(self) -> float: ...
+    @property
+    def naive_max_vertex_jitter_px(self) -> float: ...
+    @property
+    def jitter_sample_count(self) -> int: ...
+    @property
+    def peak_gpu_visible_bytes(self) -> int: ...
+    @property
+    def lod_crack_pixels(self) -> int: ...
+    @property
+    def crack_boundary_samples(self) -> int: ...
+    @property
+    def crack_depth_variance(self) -> float: ...
+    @property
+    def rendered_frames(self) -> int: ...
+    @property
+    def bounded_poll_frames(self) -> int: ...
+    @property
+    def streaming_progress_frames(self) -> int: ...
+    @property
+    def pending_streaming_frames(self) -> int: ...
+    @property
+    def coarse_fallback_frames(self) -> int: ...
+    @property
+    def max_stream_uploads_per_frame(self) -> int: ...
+    @property
+    def adapter_name(self) -> str: ...
+    @property
+    def adapter_backend(self) -> str: ...
+    @property
+    def adapter_vendor(self) -> int: ...
+    @property
+    def adapter_device_type(self) -> str: ...
+    @property
+    def software_fallback(self) -> bool: ...
+    def __getitem__(self, key: str) -> float | int | str | bool: ...
+    def as_dict(self) -> Dict[str, float | int | str | bool]: ...
+
+class GlobeScene:
+    """Native COG-backed globe scene with cached regional overview seeds.
+
+    Waypoint longitude/latitude must remain inside finite source coverage.
+    Altitude is measured in metres above the rendered terrain at the waypoint.
+    """
+    def __init__(
+        self,
+        cog_source: PathLikeStr,
+        target_lon: float,
+        target_lat: float,
+        target_name: str,
+        material_set: Optional["MaterialSet"] = ...,
+        env_maps: Optional["IBL"] = ...,
+        params: Optional[TerrainRenderParams] = ...,
+        earth_texture: Optional[np.ndarray] = ...,
+    ) -> None:
+        """``earth_texture`` optionally colours the Earth outside the terrain
+        source: a uint8 array shaped (height, width, 3|4), equirectangular with
+        width == 2 * height (row 0 = 90 N, column 0 = 180 W), width <= 8192.
+        """
+        ...
+    @staticmethod
+    def default_descent_altitudes() -> list[float]: ...
+    def fly_to(
+        self,
+        lon: float,
+        lat: float,
+        altitude: float,
+        heading: float = ...,
+        pitch: float = ...,
+    ) -> Frame:
+        """Render one covered waypoint at 0..9,000,000 metres above local ground
+        (camera-to-target distance ``altitude / cos(pitch)`` at most 9,800 km).
+
+        ``heading`` is the horizontal look direction clockwise from north in
+        degrees; ``pitch`` is degrees away from nadir in ``[0, 90)``.
+        """
+        ...
+    def scripted_descent(
+        self,
+        waypoints: Optional[
+            Sequence[
+                Tuple[float, float, float]
+                | Tuple[float, float, float, float, float]
+            ]
+        ] = ...,
+    ) -> GlobeMetrics:
+        """Render a prevalidated descent and return completed physical metrics.
+
+        Each waypoint is ``(lon, lat, altitude)`` or oriented
+        ``(lon, lat, altitude, heading, pitch)`` where ``heading`` is the
+        horizontal look direction clockwise from north in degrees and
+        ``pitch`` is degrees away from nadir in ``[0, 90)``.
+        """
+        ...
+    def snapshot(self) -> Frame: ...
+    def metrics(self) -> GlobeMetrics: ...
+    @property
+    def source(self) -> str: ...
+    @property
+    def target_name(self) -> str: ...
+    @property
+    def current_position(self) -> Optional[Tuple[float, float, float]]: ...
+    @property
+    def rendered_waypoint_count(self) -> int: ...
+    def streaming_stats(self) -> Dict[str, Any]: ...
+    @property
+    def source_bounds(self) -> Tuple[float, float, float, float]: ...
+    @property
+    def source_dimensions(self) -> Tuple[int, int]: ...
+
+class TerrainRenderer:
+    def __init__(self, session: "Session") -> None: ...
+    @property
+    def last_anamnesis_cache_report(self) -> dict[str, Any]: ...
+    def render_terrain_pbr_pom(
+        self,
+        material_set: "MaterialSet",
+        env_maps: "IBL",
+        params: TerrainRenderParams,
+        heightmap: np.ndarray,
+        target: Optional[Any] = ...,
+        water_mask: Optional[np.ndarray] = ...,
+        time_seconds: float = ...,
+        certificate: bool | str | PathLikeStr | None = ...,
+        cache: str | PathLikeStr | None = ...,
+    ) -> Frame: ...
+    def render_with_aov(
+        self,
+        material_set: "MaterialSet",
+        env_maps: "IBL",
+        params: TerrainRenderParams,
+        heightmap: np.ndarray,
+        water_mask: Optional[np.ndarray] = ...,
+        time_seconds: float = ...,
+        certificate: bool | str | PathLikeStr | None = ...,
+        cache: str | PathLikeStr | None = ...,
+    ) -> Tuple[Frame, AovFrame]: ...
+    def begin_offline_accumulation(
+        self,
+        material_set: "MaterialSet",
+        env_maps: "IBL",
+        params: TerrainRenderParams,
+        heightmap: np.ndarray,
+        water_mask: Optional[np.ndarray] = ...,
+        jitter_sequence_samples: Optional[int] = ...,
+    ) -> None: ...
+    def accumulate_batch(self, sample_count: int) -> OfflineBatchResult: ...
+    def read_accumulation_metrics(
+        self,
+        target_variance: float,
+        tile_size: int = ...,
+    ) -> OfflineMetrics: ...
+    def resolve_offline_hdr(self) -> Tuple[HdrFrame, AovFrame]: ...
+    def upload_hdr_frame(self, data: np.ndarray, size: Tuple[int, int]) -> HdrFrame: ...
+    def tonemap_offline_hdr(self, hdr_frame: HdrFrame) -> Frame: ...
+    def end_offline_accumulation(self) -> None: ...
+    def set_scatter_batches(self, batches: Sequence[Mapping[str, Any]]) -> None: ...
+    def clear_scatter_batches(self) -> None: ...
+    def get_scatter_stats(self) -> Dict[str, Any]: ...
+    def get_scatter_memory_report(self) -> Dict[str, Any]: ...
+    def get_probe_memory_report(self) -> Dict[str, Any]: ...
+    def get_reflection_probe_memory_report(self) -> Dict[str, Any]: ...
+    # Terrain material virtual texturing for albedo/normal/mask families.
+    def register_material_vt_source(
+        self,
+        material_index: int,
+        family: str,
+        image_or_pyramid: Any,
+        virtual_size_px: Tuple[int, int],
+        fallback_color: Optional[Sequence[float]] = ...,
+    ) -> None: ...
+    def clear_material_vt_sources(self) -> None: ...
+    def get_material_vt_stats(self) -> Dict[str, float]: ...
+    def force_vt_feedback_not_ready_for_test(self, not_ready_frames: int) -> None: ...
+    def read_retained_vt_requests(
+        self,
+    ) -> List[Tuple[int, int, int, int, int]]: ...
+    def read_material_vt_resident_pages_for_test(
+        self,
+    ) -> List[Tuple[int, int, int, int, int]]: ...
+    def read_latest_vt_shader_feedback(
+        self,
+    ) -> List[Tuple[int, int, int, int, int]]: ...
+    def pick_visibility_pixels(
+        self, pixels: Sequence[Tuple[int, int]]
+    ) -> List[Optional[Tuple[int, int]]]: ...
+    def pick_visibility_pixels_cpu(
+        self, pixels: Sequence[Tuple[int, int]]
+    ) -> List[Optional[Tuple[int, int]]]: ...
+    def _visibility_cpu_frame(self) -> str: ...
+    def read_contributing_tiles(self) -> List[Dict[str, Any]]: ...
+    def resolve_captured_vt_feedback_provenance(
+        self, feedback: Sequence[Tuple[int, int, int, int, int]]
+    ) -> List[Dict[str, Any]]: ...
+    def set_material_vt_residency_schedule_for_test(
+        self, schedule: Sequence[Tuple[str, int, int, int, int]]
+    ) -> None: ...
+    # BOP-P2-02: runtime height-tile streaming for clipmap terrain.
+    # max_resident_bytes limits resident tile texels; max_gpu_visible_bytes
+    # limits all height GPU allocations and never exceeds the ORBIS ceiling.
+    def enable_height_streaming(
+        self,
+        terrain_extent_m: float,
+        ring_count: int = ...,
+        ring_resolution: int = ...,
+        lod: int = ...,
+        tile_resolution: int = ...,
+        max_in_flight: int = ...,
+        pool_size: int = ...,
+        dem: Optional[np.ndarray] = ...,
+        coarse_prefill: bool = ...,
+        max_resident_bytes: Optional[int] = ...,
+        max_gpu_visible_bytes: Optional[int] = ...,
+    ) -> None: ...
+    def enable_height_streaming_cog(
+        self,
+        dataset: CogDataset,
+        terrain_extent_m: float,
+        ring_count: int = ...,
+        ring_resolution: int = ...,
+        lod: int = ...,
+        tile_resolution: int = ...,
+        max_in_flight: int = ...,
+        pool_size: int = ...,
+        coarse_prefill: bool = ...,
+        max_resident_bytes: Optional[int] = ...,
+        overview_lonlat_bounds: Optional[Tuple[float, float, float, float]] = ...,
+        max_gpu_visible_bytes: Optional[int] = ...,
+    ) -> None: ...
+    def enable_height_streaming_cog_globe(
+        self,
+        dataset: CogDataset,
+        terrain_extent_m: float,
+        ring_count: int = ...,
+        ring_resolution: int = ...,
+        lod: int = ...,
+        tile_resolution: int = ...,
+        max_in_flight: int = ...,
+        pool_size: int = ...,
+        coarse_prefill: bool = ...,
+        max_resident_bytes: Optional[int] = ...,
+        overview_lonlat_bounds: Optional[Tuple[float, float, float, float]] = ...,
+        max_gpu_visible_bytes: Optional[int] = ...,
+    ) -> None: ...
+    def disable_height_streaming(self) -> None: ...
+    def stream_height_tiles(
+        self,
+        camera_pos: Tuple[float, float, float],
+        max_uploads: int = ...,
+    ) -> Dict[str, Any]: ...
+    def stream_height_tiles_globe(
+        self,
+        camera_ecef: Tuple[float, float, float],
+        max_uploads: int = ...,
+    ) -> Dict[str, Any]: ...
+    def _wait_height_streaming(self) -> None: ...
+    def height_streaming_stats(self) -> Dict[str, Any]: ...
+
+class OfflineProgress:
+    samples_so_far: int
+    max_samples: int
+    mean_delta: float
+    p95_delta: float
+    converged_ratio: float
+    elapsed_ms: float
+
+class OfflineResult:
+    frame: Frame
+    hdr_frame: HdrFrame
+    aov_frame: AovFrame
+    metadata: Dict[str, Any]
+
+def render_offline(
+    renderer: TerrainRenderer,
+    material_set: "MaterialSet",
+    env_maps: "IBL",
+    params: TerrainRenderParams,
+    heightmap: np.ndarray,
+    *,
+    settings: OfflineQualitySettings,
+    progress_callback: Optional[Callable[[OfflineProgress], None]] = ...,
+    water_mask: Optional[np.ndarray] = ...,
+    certificate: bool | str | PathLikeStr = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> OfflineResult: ...
+
+def oidn_available() -> bool: ...
+def oidn_denoise(
+    beauty: np.ndarray,
+    albedo: Optional[np.ndarray] = ...,
+    normal: Optional[np.ndarray] = ...,
+    *,
+    hdr: bool = ...,
+    quality: str = ...,
+) -> np.ndarray: ...
+
+# --- SDF types (P0.3) ---
+
+class SdfPrimitive:
+    @classmethod
+    def sphere(cls, center: Tuple[float, float, float], radius: float, material_id: int) -> SdfPrimitive: ...
+    @classmethod
+    def box(cls, center: Tuple[float, float, float], extents: Tuple[float, float, float], material_id: int) -> SdfPrimitive: ...
+    @classmethod
+    def cylinder(cls, center: Tuple[float, float, float], radius: float, height: float, material_id: int) -> SdfPrimitive: ...
+    @classmethod
+    def plane(cls, normal: Tuple[float, float, float], distance: float, material_id: int) -> SdfPrimitive: ...
+    @classmethod
+    def torus(cls, center: Tuple[float, float, float], major_radius: float, minor_radius: float, material_id: int) -> SdfPrimitive: ...
+    @classmethod
+    def capsule(cls, point_a: Tuple[float, float, float], point_b: Tuple[float, float, float], radius: float, material_id: int) -> SdfPrimitive: ...
+    @property
+    def primitive_type(self) -> int: ...
+    @property
+    def material_id(self) -> int: ...
+
+class SdfScene:
+    def __init__(self) -> None: ...
+    @classmethod
+    def single_primitive(cls, primitive: SdfPrimitive) -> SdfScene: ...
+    def set_bounds(self, min_bounds: Tuple[float, float, float], max_bounds: Tuple[float, float, float]) -> None: ...
+    def primitive_count(self) -> int: ...
+    def node_count(self) -> int: ...
+    def evaluate(self, point: Tuple[float, float, float]) -> Tuple[float, int]: ...
+    def in_bounds(self, point: Tuple[float, float, float]) -> bool: ...
+    def clone_scene(self) -> SdfScene: ...
+
+class SdfSceneBuilder:
+    def __init__(self) -> None: ...
+    def add_sphere(self, center: Tuple[float, float, float], radius: float, material_id: int) -> int: ...
+    def add_box(self, center: Tuple[float, float, float], extents: Tuple[float, float, float], material_id: int) -> int: ...
+    def add_cylinder(self, center: Tuple[float, float, float], radius: float, height: float, material_id: int) -> int: ...
+    def add_plane(self, normal: Tuple[float, float, float], distance: float, material_id: int) -> int: ...
+    def add_torus(self, center: Tuple[float, float, float], major_radius: float, minor_radius: float, material_id: int) -> int: ...
+    def add_capsule(self, point_a: Tuple[float, float, float], point_b: Tuple[float, float, float], radius: float, material_id: int) -> int: ...
+    def union(self, left: int, right: int, material_id: int) -> int: ...
+    def smooth_union(self, left: int, right: int, smoothing: float, material_id: int) -> int: ...
+    def subtract(self, left: int, right: int, material_id: int) -> int: ...
+    def intersect(self, left: int, right: int, material_id: int) -> int: ...
+    def smooth_intersection(self, left: int, right: int, smoothing: float, material_id: int) -> int: ...
+    def smooth_subtraction(self, left: int, right: int, smoothing: float, material_id: int) -> int: ...
+    def build(self) -> SdfScene: ...
+    def reset(self) -> None: ...
+
+# --- Mesh TBN generation (P0.4) ---
+
+def mesh_generate_cube_tbn() -> Dict[str, Any]: ...
+def mesh_generate_plane_tbn(width: int, height: int) -> Dict[str, Any]: ...
+
+# Vector Picking & OIT helpers
+def set_point_shape_mode(mode: int) -> None: ...
+def set_point_lod_threshold(threshold: float) -> None: ...
+
+def is_weighted_oit_available() -> bool: ...
+
+def vector_oit_and_pick_demo(
+    width: int = ...,
+    height: int = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> Tuple[np.ndarray, int]: ...
+
+def vector_render_polygons_fill_py(
+    width: int,
+    height: int,
+    exteriors: Sequence[np.ndarray],
+    holes: Optional[Sequence[Sequence[np.ndarray]]] = ...,
+    fill_rgba: Optional[Tuple[float, float, float, float]] = ...,
+    stroke_rgba: Optional[Tuple[float, float, float, float]] = ...,
+    stroke_width: Optional[float] = ...,
+    fill_rgba_list: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    coordinates_are_ndc: Optional[bool] = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...
+
+def vector_render_analytic_py(
+    scene_json: str,
+    include_coverage: bool = ...,
+    include_records: bool = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+) -> Dict[str, Any]: ...
+
+def vector_coverage_primitives_py(scene_json: str) -> Dict[str, Any]: ...
+
+def vector_render_oit_py(
+    width: int,
+    height: int,
+    *,
+    points_xy: Optional[Sequence[Tuple[float, float]]] = ...,
+    point_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    point_size: Optional[Sequence[float]] = ...,
+    polylines: Optional[Sequence[Sequence[Tuple[float, float]]]] = ...,
+    polyline_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    stroke_width: Optional[Sequence[float]] = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...  # (H,W,4) uint8
+
+def vector_render_oit_edl_py(
+    width: int,
+    height: int,
+    *,
+    points_xy: Optional[Sequence[Tuple[float, float]]] = ...,
+    point_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    point_size: Optional[Sequence[float]] = ...,
+    polylines: Optional[Sequence[Sequence[Tuple[float, float]]]] = ...,
+    polyline_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    stroke_width: Optional[Sequence[float]] = ...,
+    edl_strength: float = ...,
+    edl_radius_px: float = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...  # (H,W,4) uint8
+
+def vector_render_pick_map_py(
+    width: int,
+    height: int,
+    *,
+    points_xy: Optional[Sequence[Tuple[float, float]]] = ...,
+    polylines: Optional[Sequence[Sequence[Tuple[float, float]]]] = ...,
+    base_pick_id: Optional[int] = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...  # (H,W) uint32
+
+def vector_render_oit_and_pick_py(
+    width: int,
+    height: int,
+    *,
+    points_xy: Optional[Sequence[Tuple[float, float]]] = ...,
+    point_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    point_size: Optional[Sequence[float]] = ...,
+    polylines: Optional[Sequence[Sequence[Tuple[float, float]]]] = ...,
+    polyline_rgba: Optional[Sequence[Tuple[float, float, float, float]]] = ...,
+    stroke_width: Optional[Sequence[float]] = ...,
+    base_pick_id: Optional[int] = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> Tuple[np.ndarray, np.ndarray]: ...  # (H,W,4) uint8, (H,W) uint32
+
+def composite_rgba_over(bottom: np.ndarray, top: np.ndarray, *, premultiplied: bool = ...) -> np.ndarray: ...  # (H,W,4) uint8
+
+# Optional export if compiled with --features terrain_spike
+class TerrainSpike:
+    def __init__(self, width: int, height: int) -> None: ...
+    def render_png(
+        self,
+        path: PathLikeStr,
+        certificate: bool | str | PathLikeStr | None = ...,
+    ) -> None: ...
+    def slope_aspect_compute(
+        self,
+        heights: np.ndarray,
+        width: int,
+        height: int,
+        dx: float = ...,
+        dy: float = ...,
+    ) -> Tuple[np.ndarray, np.ndarray]: ...
+    def contour_extract(
+        self,
+        heights: np.ndarray,
+        width: int,
+        height: int,
+        dx: float = ...,
+        dy: float = ...,
+        *,
+        levels: Sequence[float],
+    ) -> Dict[str, Any]: ...
+
+def png_to_numpy(path: PathLikeStr) -> np.ndarray: ...          # (H,W,4) uint8
+def numpy_to_png(path: PathLikeStr, array: np.ndarray) -> None: ...
+
+def dem_stats(heightmap: np.ndarray) -> Tuple[float, float, float, float]: ...
+def dem_normalize(heightmap: np.ndarray, *, mode: str = ..., out_range: Tuple[float, float] = ..., eps: float = ..., return_stats: bool = ...) -> np.ndarray | Tuple[np.ndarray, Tuple[float, float, float, float]]: ...
+
+def render_debug_pattern_frame(
+    width: int,
+    height: int,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> Any: ...
+
+def render_brdf_tile(
+    model: str,
+    roughness: float,
+    width: int,
+    height: int,
+    ndf_only: bool = ...,
+    g_only: bool = ...,
+    dfg_only: bool = ...,
+    spec_only: bool = ...,
+    roughness_visualize: bool = ...,
+    exposure: float = ...,
+    light_intensity: float = ...,
+    base_color: Tuple[float, float, float] = ...,
+    clearcoat: float = ...,
+    clearcoat_roughness: float = ...,
+    sheen: float = ...,
+    sheen_tint: float = ...,
+    specular_tint: float = ...,
+    debug_dot_products: bool = ...,
+    debug_lambert_only: bool = ...,
+    debug_diffuse_only: bool = ...,
+    debug_d: bool = ...,
+    debug_spec_no_nl: bool = ...,
+    debug_energy: bool = ...,
+    debug_angle_sweep: bool = ...,
+    debug_angle_component: int = ...,
+    debug_no_srgb: bool = ...,
+    output_mode: int = ...,
+    metallic_override: float = ...,
+    mode: str | None = ...,
+    wi3_debug_mode: int = ...,
+    wi3_debug_roughness: float = ...,
+    sphere_sectors: int = ...,
+    sphere_stacks: int = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...
+
+def render_brdf_tile_overrides(
+    model: str,
+    roughness: float,
+    width: int,
+    height: int,
+    ndf_only: bool = ...,
+    g_only: bool = ...,
+    dfg_only: bool = ...,
+    spec_only: bool = ...,
+    roughness_visualize: bool = ...,
+    exposure: float = ...,
+    light_intensity: float = ...,
+    base_color: Tuple[float, float, float] = ...,
+    clearcoat: float = ...,
+    clearcoat_roughness: float = ...,
+    sheen: float = ...,
+    sheen_tint: float = ...,
+    specular_tint: float = ...,
+    debug_dot_products: bool = ...,
+    debug_lambert_only: bool = ...,
+    debug_diffuse_only: bool = ...,
+    debug_d: bool = ...,
+    debug_spec_no_nl: bool = ...,
+    debug_energy: bool = ...,
+    debug_angle_sweep: bool = ...,
+    debug_angle_component: int = ...,
+    debug_no_srgb: bool = ...,
+    output_mode: int = ...,
+    metallic_override: float = ...,
+    mode: str | None = ...,
+    wi3_debug_mode: int = ...,
+    wi3_debug_roughness: float = ...,
+    sphere_sectors: int = ...,
+    sphere_stacks: int = ...,
+    light_dir: Tuple[float, float, float] | None = ...,
+    debug_kind: int = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...
+
+class DeviceProbeResult(TypedDict, total=False):
+    # status is always present: "ok" | "no_adapter" | "probe_error" | "native_missing".
+    status: str
+    # Present on every non-"ok" status.
+    reason: str
+    remediation: str
+    # Adapter fields, present when status == "ok".
+    name: str
+    vendor: int
+    device: int
+    device_type: str
+    backend: str
+    software_fallback: bool
+
+class DeterminismProbeResult(TypedDict, total=False):
+    # status is always present: "ok" | "probe_error" | "native_missing".
+    status: str
+    reason: str
+    remediation: str
+    # Present when status == "ok".
+    probe_sha256: str
+    probe_bytes_hex: str
+    raster_sha256: str
+    raster_bytes_hex: str
+    wgsl_sha256: str
+    raster_wgsl_sha256: str
+    adapter_name: str
+    adapter_vendor: int
+    adapter_device: int
+    adapter_device_type: str
+    adapter_backend: str
+    adapter_driver: str
+    adapter_driver_info: str
+    software_fallback: bool
+
+def enumerate_adapters() -> list[dict[str, Any]]: ...
+def device_probe(backend: Optional[str] = ...) -> DeviceProbeResult: ...
+def determinism_probe() -> DeterminismProbeResult: ...
+def native_import_error() -> BaseException | None: ...
+
+def memory_metrics() -> Dict[str, Any]: ...
+def set_budget_policy(policy: str) -> str: ...
+def get_budget_policy() -> str: ...
+def budget_remaining() -> int: ...
+def utilization_ratio() -> float: ...
+def override_memory_limit(limit_bytes: int) -> None: ...
+
+# Timing API
+from typing import TypedDict
+
+class _Stats(TypedDict):
+    min_ms: float
+    p50_ms: float
+    mean_ms: float
+    p95_ms: float
+    max_ms: float
+    std_ms: float
+
+class _Throughput(TypedDict):
+    fps: float
+    mpix_per_s: float
+
+class _Env(TypedDict, total=False):
+    status: str
+    adapter_name: str
+    backend: str
+    device_type: str
+
+class BenchmarkResult(TypedDict):
+    op: str
+    width: int
+    height: int
+    pixels: int
+    iterations: int
+    warmup: int
+    stats: _Stats
+    throughput: _Throughput
+    env: _Env
+
+def run_benchmark(
+    op: Literal["renderer_rgba","renderer_png","scene_rgba","numpy_to_png","png_to_numpy"],
+    width: int,
+    height: int,
+    *,
+    iterations: int = ...,
+    warmup: int = ...,
+    grid: int = ...,
+    colormap: str = ...,
+    seed: int = ...,
+) -> Dict[str, Any]: ...
+
+# Convenience vector scene wrapper (re-exported from forge3d.vector)
+class VectorScene:
+    def __init__(self) -> None: ...
+    def clear(self) -> None: ...
+    def add_point(self, x: float, y: float, rgba: Tuple[float, float, float, float] | None = ..., size: float | None = ...) -> None: ...
+    def add_polyline(self, path: Sequence[Tuple[float, float]], rgba: Tuple[float, float, float, float] | None = ..., width: float | None = ...) -> None: ...
+    def render_oit(self, width: int, height: int, *, certificate: bool | str | PathLikeStr = ..., cache: str | PathLikeStr | None = ...) -> np.ndarray: ...  # (H,W,4) uint8
+    def render_pick_map(self, width: int, height: int, base_pick_id: int = ..., *, certificate: bool | str | PathLikeStr = ..., cache: str | PathLikeStr | None = ...) -> np.ndarray: ...  # (H,W) uint32
+    def render_oit_and_pick(self, width: int, height: int, base_pick_id: int = ..., *, certificate: bool | str | PathLikeStr = ..., cache: str | PathLikeStr | None = ...) -> Tuple[np.ndarray, np.ndarray]: ...  # (H,W,4) uint8, (H,W) uint32
+
+# P5: Screen-space effects classes
+class SSAOSettings:
+    radius: float
+    intensity: float
+    bias: float
+    sample_count: int
+    spiral_turns: float
+    technique: str  # "SSAO" or "GTAO"
+    blur_radius: int
+    temporal_alpha: float
+    def __init__(
+        self,
+        radius: float = ...,
+        intensity: float = ...,
+        bias: float = ...,
+        sample_count: int = ...,
+        spiral_turns: float = ...,
+        technique: str = ...,
+        blur_radius: int = ...,
+        temporal_alpha: float = ...
+    ) -> None: ...
+    @staticmethod
+    def ssao(radius: float, intensity: float) -> SSAOSettings: ...
+    @staticmethod
+    def gtao(radius: float, intensity: float) -> SSAOSettings: ...
+
+class SSGISettings:
+    ray_steps: int
+    ray_radius: float
+    ray_thickness: float
+    intensity: float
+    temporal_alpha: float
+    use_half_res: bool
+    ibl_fallback: float
+    def __init__(
+        self,
+        ray_steps: int = ...,
+        ray_radius: float = ...,
+        ray_thickness: float = ...,
+        intensity: float = ...,
+        temporal_alpha: float = ...,
+        use_half_res: bool = ...,
+        ibl_fallback: float = ...
+    ) -> None: ...
+
+class SSRSettings:
+    max_steps: int
+    max_distance: float
+    thickness: float
+    stride: float
+    intensity: float
+    roughness_fade: float
+    edge_fade: float
+    temporal_alpha: float
+    def __init__(
+        self,
+        max_steps: int = ...,
+        max_distance: float = ...,
+        thickness: float = ...,
+        stride: float = ...,
+        intensity: float = ...,
+        roughness_fade: float = ...,
+        edge_fade: float = ...,
+        temporal_alpha: float = ...
+    ) -> None: ...
+
+class VolumetricSettings:
+    density: float
+    height_falloff: float
+    phase_g: float
+    max_steps: int
+    start_distance: float
+    max_distance: float
+    absorption: float
+    sun_intensity: float
+    scattering_color: Tuple[float, float, float]
+    temporal_alpha: float
+    ambient_color: Tuple[float, float, float]
+    use_shadows: bool
+    jitter_strength: float
+    phase_function: str  # "isotropic" or "hg"
+    def __init__(
+        self,
+        density: float = ...,
+        height_falloff: float = ...,
+        phase_g: float = ...,
+        max_steps: int = ...,
+        start_distance: float = ...,
+        max_distance: float = ...,
+        absorption: float = ...,
+        sun_intensity: float = ...,
+        scattering_color: Tuple[float, float, float] = ...,
+        temporal_alpha: float = ...,
+        ambient_color: Tuple[float, float, float] = ...,
+        use_shadows: bool = ...,
+        jitter_strength: float = ...,
+        phase_function: str = ...
+    ) -> None: ...
+    @staticmethod
+    def with_god_rays(density: float, phase_g: float) -> VolumetricSettings: ...
+    @staticmethod
+    def uniform_fog(density: float) -> VolumetricSettings: ...
+
+# A13: Path guiding (Python utility)
+class OnlineGuidingGrid:
+    width: int
+    height: int
+    bins_per_cell: int
+    def __init__(self, width: int, height: int, bins_per_cell: int = ...) -> None: ...
+    def update(self, x: int, y: int, bin_index: int, weight: float = ...) -> None: ...
+    def pdf(self, x: int, y: int) -> np.ndarray: ...  # (B,) float32, sum=1
+    def dims(self) -> Tuple[int, int, int]: ...
+
+# P2.1: Point Cloud GPU Rendering Path
+class PointBuffer:
+    """Point buffer with GPU interleaving support."""
+    point_count: int
+    def __init__(
+        self,
+        positions: Sequence[float],
+        colors: Optional[Sequence[int]] = ...,
+    ) -> None: ...
+    def byte_size(self) -> int: ...
+    def gpu_byte_size(self) -> int: ...
+    def create_gpu_buffer(self) -> np.ndarray: ...
+    def create_gpu_buffer_anchored(
+        self,
+        anchor_origin: Tuple[float, float, float],
+    ) -> np.ndarray: ...
+    def create_viewer_gpu_buffer(
+        self,
+        bounds_min: Sequence[float],
+        bounds_max: Sequence[float],
+    ) -> np.ndarray: ...
+
+# P2.2: COPC LAZ decompression
+def copc_laz_enabled() -> bool: ...
+def read_laz_points_info(path: str) -> Tuple[int, list[float], bool]: ...
+def read_laz_point_attributes(path: str, sample_count: int = ...) -> Dict[str, Any]: ...
+def copc_read_node_points(
+    path: str,
+    depth: int = ...,
+    x: int = ...,
+    y: int = ...,
+    z: int = ...,
+    budget: Optional[int] = ...,
+) -> Dict[str, Any]: ...
+
+# VERITAS: per-pixel cryptographic provenance
+def seal_provenance(
+    source_map: np.ndarray,
+    contributing_tiles: Sequence[Dict[str, Any]],
+    private_key: bytes,
+    image_bytes: Optional[bytes] = None,
+) -> bytes: ...
+def verify_provenance(
+    source_map: np.ndarray, manifest: bytes, image_bytes: Optional[bytes] = None
+) -> bool: ...
+
+# CENSOR: global degradation sink
+def native_degradations() -> list[dict]: ...
+def clear_native_degradations() -> None: ...
+
+# CENSOR: negotiated GPU capability report
+def capabilities() -> dict: ...
+
+# CENSOR: last-render execution certificate JSON
+def render_execution_report() -> str: ...
+def begin_render_execution_capture(entry_point: str) -> None: ...
+def finish_render_execution_capture(pass_label: str, draw_calls: int = ...) -> None: ...
+def abort_render_execution_capture() -> None: ...
+
+# CENSOR: native Ed25519 certificate signer (signature hex, public-key hex)
+def sign_render_certificate_digest(seed: bytes, digest: bytes) -> tuple[str, str]: ...
+def anamnesis_leaf_key(content: bytes) -> str: ...
+def anamnesis_pass_key(
+    label: str,
+    pipeline_descriptor: bytes,
+    uniform_bytes: bytes,
+    input_keys: list[tuple[str, str]],
+    capability_fingerprint: bytes,
+    engine_fingerprint: bytes,
+) -> str: ...
+def anamnesis_engine_fingerprint() -> str: ...
+def anamnesis_store_verify(root: str | os.PathLike[str], max_bytes: int) -> dict[str, int]: ...
+def anamnesis_store_gc(root: str | os.PathLike[str], max_bytes: int) -> int: ...
+def anamnesis_store_put_leaf(root: str | os.PathLike[str], blob: bytes, label: str, max_bytes: int) -> str: ...
+def anamnesis_store_get(root: str | os.PathLike[str], key: str, max_bytes: int) -> bytes | None: ...
+def anamnesis_restore_rgba8(blob: bytes, width: int, height: int) -> bytes: ...
+
+# CENSOR: budget-enforce test helper (raises MemoryBudgetExceeded when over budget)
+def request_host_visible_allocation_for_test(bytes: int, label: str) -> None: ...
+
+# PROBATUM: WGSL proof report
+def shader_report(mode: str | None = ...) -> Dict[str, Any]: ...
+
+# CHRONOS: deterministic compiled-frame flythrough
+class CompiledFrame:
+    @property
+    def frame_index(self) -> int: ...
+    @property
+    def base_seed(self) -> int: ...
+    @property
+    def frame_seed(self) -> int: ...
+    @property
+    def samples(self) -> int: ...
+    @property
+    def camera_hash(self) -> str: ...
+    @property
+    def scene_hash(self) -> str: ...
+    @property
+    def label_set_hash(self) -> str: ...
+    @property
+    def residency_hash(self) -> str: ...
+    @property
+    def lod_hash(self) -> str: ...
+    @property
+    def engine_revision(self) -> str: ...
+    def to_json(self) -> str: ...
+    @staticmethod
+    def from_json(json: str) -> "CompiledFrame": ...
+
+def frame_seed(base_seed: int, frame_index: int) -> int: ...
+def compile_frame(
+    frame_index: int,
+    base_seed: int,
+    samples: int,
+    camera_json: str,
+    scene_json: str,
+) -> CompiledFrame: ...
+def render_compiled_frame(compiled_frame: CompiledFrame, rgba: np.ndarray) -> str: ...
+
+# CARTOGRAPHER-PRIME: bounded-optimal, silhouette-aware label declutter
+class LabelRationale:
+    def records(self) -> List[Dict[str, Any]]: ...
+    def render(self) -> List[str]: ...
+    def __len__(self) -> int: ...
+
+def declutter_optimal(
+    candidates: Sequence[
+        Tuple[int, int, Tuple[float, float, float, float], float, bool]
+    ],
+    gap_tolerance: float = ...,
+    node_budget: int | None = ...,
+    margin: float = ...,
+) -> Tuple[List[Tuple[int, int]], float, LabelRationale]: ...
+
+def declutter(
+    candidates: Sequence[
+        Tuple[int, int, Tuple[float, float, float, float], float, bool]
+    ],
+    algorithm: Literal["optimal"] = ...,
+    gap_tolerance: float = ...,
+    node_budget: int | None = ...,
+    margin: float = ...,
+) -> Tuple[List[Tuple[int, int]], float, LabelRationale]: ...
+
+def layout_label_candidates(
+    kind: Literal["line", "curved"],
+    label_id: str,
+    text: str,
+    screen_path: Sequence[Tuple[float, float, float]],
+    positioned_glyphs: Sequence[Dict[str, Any]],
+    font_size: float,
+    arc_fractions: Sequence[float] | None = ...,
+    tracking: float = ...,
+) -> Dict[str, Any] | None: ...
+
+# AEQUITAS: PT-vs-raster perceptual adjudication pair
+def render_adjudication_pair(
+    width: int,
+    height: int,
+    spp: int,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]: ...
+
+# DIFFERENTIA: differentiable inverse path tracing (enable-inverse-pt)
+from .inverse import (
+    InverseSolveUnavailable,
+    RecoveredScene,
+    recover_scene,
+)
+from . import inverse as inverse
+
+# SPLAT-FUSED: path-traced Gaussian splat + LiDAR + terrain fusion (splat-fusion)
+from .splat import (
+    FusedCamera,
+    FusedPointCloud,
+    FusedRenderResult,
+    FusedTerrain,
+    FusedView,
+    GaussianSplatCloud,
+    SplatFusionUnavailable,
+    load_gaussian_splats,
+    render_fused,
+    render_fused_sequence,
+)
+from . import splat as splat
+
+def inverse_solve(
+    target_rgba: np.ndarray,
+    heightmap: np.ndarray,
+    width: int,
+    height: int,
+    cam: Dict[str, Any],
+    spacing: Tuple[float, float] = ...,
+    exaggeration: float = ...,
+    init_albedo: Optional[Any] = ...,
+    sun_azimuth_deg: float = ...,
+    sun_elevation_deg: float = ...,
+    sun_intensity: float = ...,
+    turbidity: float = ...,
+    sun_color: Tuple[float, float, float] = ...,
+    env_map: Optional[np.ndarray] = ...,
+    env_intensity: float = ...,
+    iters: int = ...,
+    spp: int = ...,
+    frames: int = ...,
+    tile_size: int = ...,
+    seed: int = ...,
+    lr_albedo: float = ...,
+    lr_sun: float = ...,
+    lr_turbidity: float = ...,
+    early_stop_tol: float = ...,
+    early_stop_patience: int = ...,
+    spatial_reuse: bool = ...,
+    edge_term: bool = ...,
+    score_correction: bool = ...,
+) -> Dict[str, Any]: ...
+
+def inverse_render_primal(
+    heightmap: np.ndarray,
+    width: int,
+    height: int,
+    cam: Dict[str, Any],
+    albedo: Any,
+    spacing: Tuple[float, float] = ...,
+    exaggeration: float = ...,
+    sun_azimuth_deg: float = ...,
+    sun_elevation_deg: float = ...,
+    sun_intensity: float = ...,
+    turbidity: float = ...,
+    sun_color: Tuple[float, float, float] = ...,
+    env_map: Optional[np.ndarray] = ...,
+    env_intensity: float = ...,
+    spp: int = ...,
+    frames: int = ...,
+    seed: int = ...,
+) -> Dict[str, Any]: ...
+
+# PROMETHEUS: converged GPU path-traced terrain reference (sun + IBL)
+# ``earth_model="flat"`` requires ``refraction_model="none"``; unsupported
+# model names or pairs raise an exception and never silently fall back.
+def hybrid_render_terrain_reference(
+    heightmap: np.ndarray,
+    width: int,
+    height: int,
+    camera: dict | None = ...,
+    *,
+    spacing: Tuple[float, float] = ...,
+    exaggeration: float = ...,
+    albedo: Tuple[float, float, float] = ...,
+    albedo_map: np.ndarray | None = ...,
+    albedo_sampling: str | None = ...,
+    camera_model: str | None = ...,
+    sensor_rect: Tuple[float, float, float, float] | None = ...,
+    full_width: int | None = ...,
+    full_height: int | None = ...,
+    pixel_offset: Optional[Tuple[int, int]] = ...,
+    turbidity: float = ...,
+    sun_azimuth_deg: float | None = ...,
+    sun_elevation_deg: float | None = ...,
+    solar_time: object | None = ...,
+    sun_intensity: float = ...,
+    sun_color: Sequence[float] | np.ndarray = ...,
+    env_map: np.ndarray | None = ...,
+    env_intensity: float = ...,
+    mesh_vertices: np.ndarray | None = ...,
+    mesh_indices: np.ndarray | None = ...,
+    spp: int = ...,
+    max_frames: int = ...,
+    min_frames: int = ...,
+    variance_threshold: float = ...,
+    seed: int = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+    observer_latitude_deg: float | None = ...,
+    observer_longitude_deg: float | None = ...,
+    earth_model: str = ...,
+    sphere_radius_m: float = ...,
+    refraction_model: str = ...,
+    refraction_k: float = ...,
+    pressure_mbar: float | None = ...,
+    temperature_c: float | None = ...,
+    atmosphere: AtmosphereSettings | Mapping[str, Any] | AtmosphereLutHandle | None = ...,
+    sdf_scene: object | None = ...,
+) -> Dict[str, Any]: ...
+
+# AETHER: independent stochastic spectral atmosphere acceptance reference.
+def hybrid_render_aether_spectral_reference(
+    heightmap: np.ndarray,
+    width: int,
+    height: int,
+    cam: Dict[str, Any],
+    spacing: Tuple[float, float] = ...,
+    exaggeration: float = ...,
+    sun_azimuth_deg: float = ...,
+    sun_elevation_deg: float = ...,
+    sun_intensity: float = ...,
+    turbidity: float = ...,
+    ozone_du: float = ...,
+    mie_g: float = ...,
+    ground_albedo: float = ...,
+    spp: int = ...,
+    seed: int = ...,
+    enabled: bool = ...,
+    variance_threshold: float = ...,
+    certificate: bool | str | PathLikeStr | None = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> Dict[str, Any]: ...
+
+# AETHER: spectral atmosphere public/native surface
+class AtmosphereLutHandle:
+    def __new__(cls) -> NoReturn: ...
+    @property
+    def turbidity(self) -> float: ...
+    @property
+    def ozone_du(self) -> float: ...
+    @property
+    def mie_g(self) -> float: ...
+    @property
+    def ground_albedo(self) -> float: ...
+    @property
+    def scattering_orders(self) -> int: ...
+    @property
+    def precomputed(self) -> bool: ...
+    @property
+    def byte_size(self) -> int: ...
+    @property
+    def deterministic_sha256(self) -> str: ...
+    @property
+    def aerial_lut_semantics(self) -> str: ...
+    def __getitem__(self, key: str) -> Any: ...
+    def __contains__(self, key: object) -> bool: ...
+    def __len__(self) -> int: ...
+    def keys(self) -> List[str]: ...
+    def as_dict(self) -> Dict[str, Any]: ...
+
+def atmosphere_bake_luts(
+    turbidity: float = ...,
+    ozone_du: float = ...,
+    mie_g: float = ...,
+    ground_albedo: float = ...,
+    scattering_orders: int = ...,
+) -> AtmosphereLutHandle: ...
+def atmosphere_spectral_to_linear_rgb(
+    samples: Sequence[float],
+) -> Tuple[float, float, float]: ...
+def atmosphere_generate_environment(
+    width: int,
+    height: int,
+    sun_elevation_deg: float,
+    turbidity: float = ...,
+    ozone_du: float = ...,
+    mie_g: float = ...,
+    ground_albedo: float = ...,
+    mode: Literal["lut", "reference"] = ...,
+) -> Dict[str, Any]: ...
+def atmosphere_reference_aerial(
+    surface_rgb: Tuple[float, float, float],
+    observer_altitude_m: float,
+    distance_m: float,
+    view_dir: Tuple[float, float, float],
+    sun_dir: Tuple[float, float, float],
+    turbidity: float = ...,
+    ozone_du: float = ...,
+    mie_g: float = ...,
+    ground_albedo: float = ...,
+) -> Tuple[float, float, float]: ...
+
+def render_offscreen_rgba(
+    width: int,
+    height: int,
+    *,
+    scene: Any | None = ...,
+    camera: Optional[Mapping[str, Any]] = ...,
+    seed: int = ...,
+    frames: int = ...,
+    denoiser: str = ...,
+    certificate: bool | str | PathLikeStr = ...,
+    cache: str | PathLikeStr | None = ...,
+) -> np.ndarray: ...
+
+# P2.3: Label style bindings
+class LabelFlags:
+    underline: bool
+    small_caps: bool
+    leader: bool
+    def __init__(
+        self,
+        underline: bool = ...,
+        small_caps: bool = ...,
+        leader: bool = ...,
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
+class LabelStyle:
+    size: float
+    color: Tuple[float, float, float, float]
+    halo_color: Tuple[float, float, float, float]
+    halo_width: float
+    priority: int
+    min_depth: float
+    max_depth: float
+    depth_fade: float
+    min_zoom: float
+    max_zoom: float
+    rotation: float
+    offset: Tuple[float, float]
+    flags: LabelFlags
+    horizon_fade_angle: float
+    def __init__(
+        self,
+        size: float = ...,
+        color: Tuple[float, float, float, float] = ...,
+        halo_color: Tuple[float, float, float, float] = ...,
+        halo_width: float = ...,
+        priority: int = ...,
+        min_depth: float = ...,
+        max_depth: float = ...,
+        depth_fade: float = ...,
+        min_zoom: float = ...,
+        max_zoom: float = ...,
+        rotation: float = ...,
+        offset: Tuple[float, float] = ...,
+        flags: Optional[LabelFlags] = ...,
+        horizon_fade_angle: float = ...,
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
+# Interactive viewer wrapper
+from . import animation, camera_rigs, terrain_scatter
+from .terrain_scatter import ScatterWindSettings
+from .viewer import (
+    LabelBatchResult,
+    ViewerError,
+    ViewerHandle,
+    open_viewer,
+    open_viewer_async,
+    set_msaa,
+)
+
+# Bundled datasets and fetch helpers
+from .datasets import (
+    available as available_datasets,
+    bundled as bundled_datasets,
+    dataset_info,
+    fetch as fetch_dataset,
+    fetch_cityjson,
+    fetch_copc,
+    fetch_dem,
+    list_datasets,
+    mini_dem,
+    mini_dem_path as mini_dem_path,
+    remote as remote_datasets,
+    sample_boundaries,
+    sample_boundaries_path,
+)
+
+# Optional notebook widgets
+from .widgets import ViewerWidget, widgets_available
+
+
+class LicenseError(RuntimeError): ...
+
+
+def set_license_key(key: str) -> None: ...
+
+# P0.3/M2: Sun ephemeris
+class SunPosition:
+    @property
+    def azimuth(self) -> float: ...
+    @property
+    def elevation(self) -> float: ...
+    def to_direction(self) -> Tuple[float, float, float]: ...
+    def to_scene_direction(self) -> Tuple[float, float, float]: ...
+    def is_daytime(self) -> bool: ...
+
+def sun_position(
+    latitude: float, longitude: float, datetime_utc: str
+) -> SunPosition: ...
+def sun_position_utc(
+    latitude: float,
+    longitude: float,
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    second: int = ...,
+) -> SunPosition: ...
+
+# MENSURA geodesy
+def body_info(name: str) -> dict[str, Any]: ...
+def areoid_undulation(lat: float, lon: float) -> float: ...
+def geoid_undulation(lat: float, lon: float) -> float: ...
+def orthometric_to_ellipsoidal(h_orthometric: float, lat: float, lon: float) -> float: ...
+def ellipsoidal_to_orthometric(h_ellipsoidal: float, lat: float, lon: float) -> float: ...
+def geodesic_inverse(lat1: float, lon1: float, lat2: float, lon2: float, *, body: str = ...) -> dict[str, float]: ...
+def geodesic_direct(lat1: float, lon1: float, azi1: float, s12: float, *, body: str = ...) -> dict[str, float]: ...
+def wgs84_to_ecef(lon: float, lat: float, h: float = ...) -> tuple[float, float, float]: ...
+def ecef_to_wgs84(x: float, y: float, z: float) -> tuple[float, float, float]: ...
+def dem_orthometric_to_ellipsoidal(
+    dem: Any, bounds: tuple[float, float, float, float]
+) -> np.ndarray: ...

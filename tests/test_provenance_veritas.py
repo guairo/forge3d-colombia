@@ -1,0 +1,773 @@
+# tests/test_provenance_veritas.py
+# VERITAS DoD gate: per-pixel source attribution through the streaming VT
+# path, sealed with a SHA256 Merkle root + Ed25519 signature. CPU sections
+# pin the canonical encoding/Merkle rules (cross-checked against the Rust
+# implementation); the GPU class renders >=2 overlapping albedo VT sources
+# and asserts 100% attribution, root match, signature validity, and
+# single-texel tamper detection.
+# RELEVANT FILES: src/core/provenance.rs, python/forge3d/provenance.py,
+# tools/verify_provenance.py, src/py_functions/provenance.rs
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import forge3d as f3d
+from _terrain_runtime import (
+    _build_heightmap,
+    _terrain_rendering_available_inprocess,
+    terrain_rendering_available,
+)
+from forge3d import provenance as prov
+from forge3d.terrain_params import (
+    AovSettings,
+    PomSettings,
+    TerrainVTSettings,
+    TriplanarSettings,
+    VTLayerFamily,
+    make_terrain_params_config,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VERIFIER = REPO_ROOT / "tools" / "verify_provenance.py"
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "provenance"
+GPU_AVAILABLE = (
+    terrain_rendering_available()
+    if os.environ.get("GITHUB_ACTIONS") == "true"
+    else _terrain_rendering_available_inprocess()
+)
+
+# Fixed, committed test keypair seed (fixtures only — not a production key).
+TEST_PRIVATE_KEY = hashlib.sha256(b"forge3d-veritas-test-key").digest()
+TEST_IMAGE_BYTES = b"forge3d-veritas-rendered-image"
+
+# Authored albedo source colors (sRGB bytes), one per material index.
+SOURCE_COLORS = (
+    (220, 30, 30),
+    (30, 220, 30),
+    (30, 30, 220),
+    (220, 220, 30),
+)
+VIRTUAL_SIZE = 512
+RESIDENCY_SCHEDULE = (
+    ("albedo", 3, 0, 0, 1),
+    ("albedo", 1, 1, 1, 0),
+    ("albedo", 0, 0, 0, 1),
+    ("albedo", 2, 0, 0, 1),
+    ("albedo", 0, 0, 0, 0),
+    ("albedo", 1, 1, 0, 0),
+    ("albedo", 1, 0, 0, 1),
+    ("albedo", 0, 0, 1, 0),
+)
+
+
+# ---------------------------------------------------------------------------
+# CPU contracts (no GPU required)
+# ---------------------------------------------------------------------------
+
+def _tile(family_slot=0, source_id=1, x=0, y=0, mip=0, payload=b"payload"):
+    return prov.encode_tile_leaf(
+        family_slot, source_id, x, y, mip, hashlib.sha256(payload).digest()
+    )
+
+
+def test_tile_leaf_encoding_round_trips() -> None:
+    content_hash = hashlib.sha256(b"content").digest()
+    leaf = prov.encode_tile_leaf(0, 3, 7, 11, 2, content_hash)
+    assert len(leaf) == 56
+    assert leaf[:4] == b"VTLF"
+    decoded = prov.decode_tile_leaf(leaf)
+    assert decoded == {
+        "family_slot": 0,
+        "source_id": 3,
+        "tile_x": 7,
+        "tile_y": 11,
+        "mip_level": 2,
+        "content_hash": content_hash,
+    }
+
+
+def test_source_map_leaf_encoding() -> None:
+    digest = hashlib.sha256(b"map").digest()
+    leaf = prov.encode_source_map_leaf(640, 480, digest)
+    assert len(leaf) == 44
+    assert leaf[:4] == b"VTSM"
+    assert leaf[12:] == digest
+
+
+def test_image_leaf_encoding() -> None:
+    digest = hashlib.sha256(TEST_IMAGE_BYTES).digest()
+    leaf = prov.encode_image_leaf(digest)
+    assert len(leaf) == 36
+    assert leaf[:4] == b"VTIM"
+    assert leaf[4:] == digest
+
+
+def test_merkle_root_is_order_independent() -> None:
+    leaves = [_tile(x=i, y=i * 2, source_id=(i % 4) + 1) for i in range(7)]
+    shuffled = list(reversed(leaves))
+    shuffled[0], shuffled[3] = shuffled[3], shuffled[0]
+    assert prov.build_merkle_root(leaves) == prov.build_merkle_root(shuffled)
+
+
+def test_merkle_odd_node_promotion_rule() -> None:
+    leaves = sorted(_tile(source_id=i + 1, x=i) for i in range(3))
+    h = [hashlib.sha256(l).digest() for l in leaves]
+    left = hashlib.sha256(h[0] + h[1]).digest()
+    expected = hashlib.sha256(left + h[2]).digest()  # lone h[2] promoted
+    assert prov.build_merkle_root(leaves) == expected
+
+
+def test_merkle_empty_sentinel() -> None:
+    assert (
+        prov.build_merkle_root([])
+        == hashlib.sha256(b"forge3d.provenance.v2.empty").digest()
+    )
+
+
+def test_known_answer_root_matches_rust_vector() -> None:
+    """Cross-language lock: the same vector is asserted in
+    src/core/provenance.rs::known_answer_root_vector."""
+    leaves = [
+        prov.encode_tile_leaf(0, 1, 0, 0, 0, hashlib.sha256(b"source-a").digest()),
+        prov.encode_tile_leaf(0, 2, 1, 0, 1, hashlib.sha256(b"source-b").digest()),
+        prov.encode_source_map_leaf(4, 2, hashlib.sha256(b"source-map").digest()),
+        prov.encode_image_leaf(hashlib.sha256(TEST_IMAGE_BYTES).digest()),
+    ]
+    assert (
+        prov.build_merkle_root(leaves).hex()
+        == "579d5530432f9620ff2b8d4547df385c52b26282bd6a6a77c67e8ff6874cce75"
+    )
+
+
+def _sample_tiles():
+    return [
+        {
+            "family": "albedo",
+            "family_slot": 0,
+            "source_id": 1,
+            "tile_x": 0,
+            "tile_y": 0,
+            "mip_level": 0,
+            "content_hash": hashlib.sha256(b"src-a").hexdigest(),
+        },
+        {
+            "family": "albedo",
+            "family_slot": 0,
+            "source_id": 2,
+            "tile_x": 1,
+            "tile_y": 0,
+            "mip_level": 0,
+            "content_hash": hashlib.sha256(b"src-b").hexdigest(),
+        },
+    ]
+
+
+def test_offline_seal_verify_round_trip_and_tamper() -> None:
+    source_map = np.zeros((16, 24), dtype=np.uint32)
+    source_map[:8, :] = 1
+    source_map[8:, :12] = 2  # remaining quadrant stays SOURCE_ID_NONE
+
+    manifest = prov.seal_provenance_offline(
+        source_map, _sample_tiles(), TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    report = prov.verify_provenance_offline(source_map, manifest, TEST_IMAGE_BYTES)
+    assert report["ok"] is True
+    assert report["root_match"] is True
+    assert report["signature_valid"] is True
+    assert report["image_sha256_match"] is True
+
+    # SOURCE_ID_NONE is never counted as a real attribution.
+    assert prov.SOURCE_ID_NONE not in report["coverage"]
+    assert report["coverage"] == {1: 8 * 24, 2: 8 * 12}
+    assert report["unattributed_pixels"] == 8 * 12
+
+    # Single-texel tamper: the recomputed root must break.
+    tampered = source_map.copy()
+    tampered[0, 0] ^= 1
+    tampered_report = prov.verify_provenance_offline(tampered, manifest, TEST_IMAGE_BYTES)
+    assert tampered_report["root_match"] is False
+    assert tampered_report["ok"] is False
+
+    replacement_report = prov.verify_provenance_offline(
+        source_map, manifest, TEST_IMAGE_BYTES + b"replacement"
+    )
+    assert replacement_report["image_sha256_match"] is False
+    assert replacement_report["root_match"] is False
+    assert replacement_report["ok"] is False
+
+
+def test_offline_seal_is_deterministic() -> None:
+    source_map = np.arange(48, dtype=np.uint32).reshape(6, 8) % 3
+    a = prov.seal_provenance_offline(
+        source_map, _sample_tiles(), TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    b = prov.seal_provenance_offline(
+        source_map, list(reversed(_sample_tiles())), TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    assert a == b, "seal must be independent of contributing-tile order"
+
+
+def test_offline_legacy_calls_warn_and_verify() -> None:
+    source_map = np.ones((4, 5), dtype=np.uint32)
+
+    with pytest.warns(DeprecationWarning):
+        legacy_manifest = prov.seal_provenance_offline(
+            source_map, _sample_tiles(), TEST_PRIVATE_KEY
+        )
+    decoded = json.loads(legacy_manifest)
+    assert decoded["schema_version"] == 1
+    assert "image_sha256" not in decoded
+
+    with pytest.warns(DeprecationWarning):
+        report = prov.verify_provenance_offline(source_map, legacy_manifest)
+    assert report["ok"] is True
+    assert report["root_match"] is True
+    assert report["signature_valid"] is True
+
+    new_manifest = prov.seal_provenance_offline(
+        source_map, _sample_tiles(), TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="image_bytes"):
+        prov.verify_provenance_offline(source_map, new_manifest)
+
+
+# SHA256 of the manifest the v1.38.0 `seal_provenance_offline` returned for
+# `_legacy_source_map()` + `_sample_tiles()` + TEST_PRIVATE_KEY. The
+# deprecated no-image call must keep reproducing it byte for byte.
+LEGACY_1_38_0_MANIFEST_SHA256 = (
+    "44a0e3d7c4f8069f09f9849e60ff4c6589e428d59c489e1e00375139df60d799"
+)
+
+
+def _legacy_source_map() -> np.ndarray:
+    source_map = np.zeros((10, 10), dtype=np.uint32)
+    source_map[2:7, 3:9] = 1
+    source_map[7:, :4] = 2
+    return source_map
+
+
+def test_offline_legacy_seal_is_byte_identical_to_1_38_0() -> None:
+    with pytest.warns(DeprecationWarning):
+        manifest = prov.seal_provenance_offline(
+            _legacy_source_map(), _sample_tiles(), TEST_PRIVATE_KEY
+        )
+    assert hashlib.sha256(manifest).hexdigest() == LEGACY_1_38_0_MANIFEST_SHA256
+
+
+@pytest.mark.skipif(
+    not hasattr(f3d, "seal_provenance"), reason="native forge3d extension not available"
+)
+def test_native_legacy_calls_warn_and_keep_1_38_0_manifest() -> None:
+    source_map = _legacy_source_map()
+    tiles = _sample_tiles()
+    with pytest.warns(DeprecationWarning, match="image_bytes"):
+        native = bytes(f3d.seal_provenance(source_map, tiles, TEST_PRIVATE_KEY))
+    with pytest.warns(DeprecationWarning):
+        offline = prov.seal_provenance_offline(source_map, tiles, TEST_PRIVATE_KEY)
+    assert hashlib.sha256(offline).hexdigest() == LEGACY_1_38_0_MANIFEST_SHA256
+    # The native seal serializes the same 1.38.0 content with serde_json's
+    # sorted keys and two-space pretty printing.
+    assert native == json.dumps(json.loads(offline), indent=2, sort_keys=True).encode()
+    decoded = json.loads(native)
+    assert decoded["schema_version"] == 1
+    assert "image_sha256" not in decoded
+
+    with pytest.warns(DeprecationWarning, match="image_bytes"):
+        assert f3d.verify_provenance(source_map, native) is True
+    # Schema v1 has no image leaf, so supplied image bytes are not bound.
+    assert f3d.verify_provenance(source_map, native, TEST_IMAGE_BYTES) is True
+    tampered = source_map.copy()
+    tampered[0, 0] ^= 1
+    with pytest.warns(DeprecationWarning):
+        assert f3d.verify_provenance(tampered, native) is False
+
+    current = f3d.seal_provenance(source_map, tiles, TEST_PRIVATE_KEY, TEST_IMAGE_BYTES)
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="image_bytes"):
+        f3d.verify_provenance(source_map, current)
+
+
+@pytest.mark.skipif(
+    not hasattr(f3d, "seal_provenance"), reason="native forge3d extension not available"
+)
+def test_native_and_offline_seals_agree() -> None:
+    source_map = np.zeros((10, 10), dtype=np.uint32)
+    source_map[2:7, 3:9] = 1
+    tiles = _sample_tiles()
+    native = f3d.seal_provenance(
+        source_map, tiles, TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    offline = prov.seal_provenance_offline(
+        source_map, tiles, TEST_PRIVATE_KEY, TEST_IMAGE_BYTES
+    )
+    native_manifest = json.loads(bytes(native))
+    offline_manifest = json.loads(offline)
+    assert native_manifest["merkle_root"] == offline_manifest["merkle_root"]
+    assert native_manifest["signature"] == offline_manifest["signature"]
+    assert native_manifest["public_key"] == offline_manifest["public_key"]
+    assert native_manifest["image_sha256"] == offline_manifest["image_sha256"]
+    # Cross-verification in both directions.
+    assert f3d.verify_provenance(source_map, offline, TEST_IMAGE_BYTES) is True
+    assert prov.verify_provenance_offline(
+        source_map, bytes(native), TEST_IMAGE_BYTES
+    )["ok"] is True
+    assert f3d.verify_provenance(
+        source_map, offline, TEST_IMAGE_BYTES + b"replacement"
+    ) is False
+
+
+@pytest.mark.skipif(
+    not hasattr(f3d, "seal_provenance"), reason="native forge3d extension not available"
+)
+def test_native_seal_rejects_uncovered_source_ids() -> None:
+    source_map = np.zeros((4, 4), dtype=np.uint32)
+    source_map[0, 0] = 3
+    with pytest.raises(ValueError, match="source ids without contributing albedo tiles.*3"):
+        f3d.seal_provenance(source_map, _sample_tiles(), TEST_PRIVATE_KEY, b"image-bytes")
+
+
+def test_mapscene_render_validates_provenance_kwargs(tmp_path) -> None:
+    """MapScene emission flag is off by default and validates its key without
+    touching the GPU (validation happens before any render work)."""
+    from forge3d.map_scene import (
+        LightingPreset,
+        MapScene,
+        OrbitCamera,
+        OutputSpec,
+        SceneRecipe,
+        TerrainSource,
+    )
+
+    heightmap = np.linspace(0.0, 1.0, 16 * 16, dtype=np.float32).reshape(16, 16)
+    recipe = SceneRecipe(
+        terrain=TerrainSource(data=heightmap, metadata={"asset_status": "fixture"}),
+        camera=OrbitCamera(),
+        lighting=LightingPreset(),
+        output=OutputSpec(path=str(tmp_path / "out.png"), width=32, height=32),
+    )
+    scene = MapScene(recipe)
+    with pytest.raises(ValueError, match="32-byte Ed25519 seed"):
+        scene.render(emit_provenance=True)
+    with pytest.raises(ValueError, match="32-byte Ed25519 seed"):
+        scene.render(emit_provenance=True, provenance_signing_key=b"short")
+    with pytest.raises(ValueError, match="requires emit_provenance"):
+        scene.render(provenance_signing_key=TEST_PRIVATE_KEY)
+
+
+# ---------------------------------------------------------------------------
+# GPU DoD gate
+# ---------------------------------------------------------------------------
+
+def _flat_source(color: tuple[int, int, int]) -> np.ndarray:
+    img = np.zeros((VIRTUAL_SIZE, VIRTUAL_SIZE, 4), dtype=np.uint8)
+    img[..., 0], img[..., 1], img[..., 2] = color
+    img[..., 3] = 255
+    return np.ascontiguousarray(img)
+
+
+def _register_sources(renderer) -> None:
+    renderer.clear_material_vt_sources()
+    for material_index, color in enumerate(SOURCE_COLORS):
+        renderer.register_material_vt_source(
+            material_index,
+            "albedo",
+            _flat_source(color),
+            (VIRTUAL_SIZE, VIRTUAL_SIZE),
+            # Neutral gray fallback, deliberately unlike every source color,
+            # so a fallback-shaded pixel can never masquerade as a source.
+            [0.5, 0.5, 0.5, 1.0],
+        )
+
+
+def _build_params(*, source_id: bool = True) -> "f3d.TerrainRenderParams":
+    config = make_terrain_params_config(
+        size_px=(256, 192),
+        render_scale=1.0,
+        terrain_span=8.0,
+        msaa_samples=1,
+        z_scale=0.1,
+        exposure=1.0,
+        domain=(0.0, 1.0),
+        albedo_mode="material",
+        colormap_strength=0.0,
+        hue_variation_strength=0.0,
+        material_slope_bias=0.0,
+        ibl_enabled=True,
+        ibl_intensity=1.8,
+        light_azimuth_deg=136.0,
+        light_elevation_deg=24.0,
+        sun_intensity=2.2,
+        cam_radius=10.0,
+        cam_phi_deg=0.0,
+        cam_theta_deg=0.0,
+        fov_y_deg=50.0,
+        camera_mode="mesh:zup",
+        triplanar=TriplanarSettings(scale=0.05, blend_sharpness=4.0, normal_strength=1.0),
+        pom=PomSettings(False, "Occlusion", 0.0, 1, 1, 0, False, False),
+        aov=AovSettings(
+            enabled=True, albedo=True, normal=True, depth=True, source_id=source_id
+        ),
+    )
+    config.cam_target = [0.0, 0.0, 0.0]
+    config.vt = TerrainVTSettings(
+        enabled=True,
+        atlas_size=4096,
+        residency_budget_mb=8.0,
+        max_mip_levels=2,
+        use_feedback=True,
+        layers=[
+            VTLayerFamily(
+                family="albedo",
+                virtual_size_px=(VIRTUAL_SIZE, VIRTUAL_SIZE),
+                tile_size=256,
+                tile_border=0,
+            )
+        ],
+    )
+    return f3d.TerrainRenderParams(config)
+
+
+def _write_test_hdr(path: Path, width: int = 8, height: int = 4) -> None:
+    with path.open("wb") as handle:
+        handle.write(b"#?RADIANCE\n")
+        handle.write(b"FORMAT=32-bit_rle_rgbe\n\n")
+        handle.write(f"-Y {height} +X {width}\n".encode())
+        for y in range(height):
+            for x in range(width):
+                r = int((x / max(width - 1, 1)) * 255)
+                g = int((y / max(height - 1, 1)) * 255)
+                handle.write(bytes([r, g, 164, 128]))
+
+
+def _build_test_ibl():
+    with tempfile.NamedTemporaryFile(suffix=".hdr", delete=False) as tmp:
+        hdr_path = Path(tmp.name)
+    try:
+        _write_test_hdr(hdr_path)
+        return f3d.IBL.from_hdr(str(hdr_path), intensity=1.0)
+    finally:
+        hdr_path.unlink(missing_ok=True)
+
+
+def _expected_ids_from_authored_layout(
+    normal: np.ndarray, depth: np.ndarray
+) -> np.ndarray:
+    height, width, _ = normal.shape
+    columns = np.arange(width, dtype=np.int32)[None, :]
+    authored = np.where(columns < width // 2, 2, 1)
+    authored = np.broadcast_to(authored, (height, width))
+    terrain = (np.linalg.norm(normal, axis=-1) > 0.5) & (depth > 1e-6)
+    seam_distance = np.abs(columns + 0.5 - width / 2.0)
+    sampled = terrain & (seam_distance >= 4.0)
+    return np.where(sampled, authored, prov.SOURCE_ID_NONE).astype(np.uint32)
+
+
+@pytest.fixture()
+def provenance_render_env():
+    if not GPU_AVAILABLE:
+        pytest.skip("VERITAS DoD test requires a terrain-capable GPU runtime")
+    session = f3d.Session(window=False)
+    renderer = f3d.TerrainRenderer(session)
+    material_set = f3d.MaterialSet.terrain_default(triplanar_scale=6.0)
+    heightmap = np.full((160, 160), 0.5, dtype=np.float32)
+    ibl = _build_test_ibl()
+    renderer.clear_material_vt_sources()
+    try:
+        yield renderer, material_set, ibl, heightmap
+    finally:
+        try:
+            renderer.clear_material_vt_sources()
+        except RuntimeError:
+            pass
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="VERITAS DoD test requires GPU-backed forge3d")
+class TestVeritasProvenanceDoD:
+    def _render_triple(self, env, schedule=RESIDENCY_SCHEDULE):
+        renderer, material_set, ibl, heightmap = env
+        _register_sources(renderer)
+        renderer.set_material_vt_residency_schedule_for_test(schedule)
+        frame, aov_frame = renderer.render_with_aov(
+            material_set=material_set,
+            env_maps=ibl,
+            params=_build_params(),
+            heightmap=heightmap,
+        )
+        assert aov_frame.has_source_id
+        rgba = np.asarray(frame.to_numpy())
+        source_map = np.asarray(aov_frame.source_id(), dtype=np.uint32)
+        normal = np.asarray(aov_frame.normal(), dtype=np.float32)
+        depth = np.asarray(aov_frame.depth(), dtype=np.float32)
+        tiles = renderer.read_contributing_tiles()
+        return rgba, normal, depth, source_map, tiles
+
+    def test_measurable_win(self, provenance_render_env, tmp_path):
+        rgba, normal, depth, source_map, tiles = self._render_triple(
+            provenance_render_env
+        )
+        _, _, _, reverse_source_map, reverse_tiles = self._render_triple(
+            provenance_render_env, tuple(reversed(RESIDENCY_SCHEDULE))
+        )
+        np.testing.assert_array_equal(reverse_source_map, source_map)
+        assert reverse_tiles == tiles
+        assert source_map.shape == normal.shape[:2] == depth.shape == rgba.shape[:2]
+        assert tiles, "streaming VT feedback produced no contributing tiles"
+        albedo_tiles = [t for t in tiles if t["family"] == "albedo"]
+        assert albedo_tiles, "no albedo-family contributing tiles"
+        assert {t["mip_level"] for t in albedo_tiles} == {0, 1}
+
+        # --- (1) 100% correct attribution over the fixed sampled set -------
+        expected = _expected_ids_from_authored_layout(normal, depth)
+        sampled = expected != prov.SOURCE_ID_NONE
+        sampled_count = int(sampled.sum())
+        assert sampled_count >= 1024, f"only {sampled_count} authored sampled pixels"
+        mismatches = int((source_map[sampled] != expected[sampled]).sum())
+        assert mismatches == 0, (
+            f"{mismatches}/{sampled_count} sampled pixels attributed to the wrong source"
+        )
+        distinct = set(np.unique(source_map[sampled]).tolist())
+        assert distinct == {1, 2}, f"expected authored sources {{1, 2}}, saw {distinct}"
+
+        # Every attributed pixel id must correspond to a contributing source.
+        tile_ids = {t["source_id"] for t in albedo_tiles}
+        assert distinct <= tile_ids
+
+        # --- (2)+(3) seal: Merkle root match + signature True ---------------
+        image_path = tmp_path / "image.png"
+        smap_path = tmp_path / "source_map.npy"
+        manifest_path = tmp_path / "provenance.json"
+        f3d.numpy_to_png(str(image_path), rgba)
+        image_bytes = image_path.read_bytes()
+        manifest_bytes = f3d.seal_provenance(
+            source_map, tiles, TEST_PRIVATE_KEY, image_bytes
+        )
+        assert f3d.verify_provenance(source_map, manifest_bytes, image_bytes) is True
+        offline_report = prov.verify_provenance_offline(
+            source_map, bytes(manifest_bytes), image_bytes
+        )
+        assert offline_report["root_match"] is True
+        assert offline_report["signature_valid"] is True
+        assert offline_report["image_sha256_match"] is True
+        assert offline_report["ok"] is True
+        assert not offline_report["unknown_source_ids"]
+
+        # --- (4) single-texel tamper detection ------------------------------
+        tampered = source_map.copy()
+        tampered[0, 0] ^= 1
+        assert f3d.verify_provenance(tampered, manifest_bytes, image_bytes) is False
+        assert prov.verify_provenance_offline(
+            tampered, bytes(manifest_bytes), image_bytes
+        )["ok"] is False
+
+        # --- standalone verifier CLI over the emitted triple ----------------
+        np.save(smap_path, source_map)
+        manifest_path.write_bytes(bytes(manifest_bytes))
+
+        result = subprocess.run(
+            [sys.executable, str(VERIFIER), str(image_path), str(smap_path), str(manifest_path)],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, f"verifier failed:\n{result.stdout}\n{result.stderr}"
+        assert "merkle_root_match: True" in result.stdout
+        assert "signature_valid: True" in result.stdout
+        assert "image_sha256_match: True" in result.stdout
+        assert "tamper_probe_single_texel_detected: True" in result.stdout
+        assert "verified: True" in result.stdout
+
+        # --- refresh the committed offline-verification fixture on demand ---
+        if os.environ.get("FORGE3D_UPDATE_PROVENANCE_FIXTURE") == "1":
+            FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, FIXTURE_DIR / "image.png")
+            shutil.copy2(smap_path, FIXTURE_DIR / "source_map.npy")
+            shutil.copy2(manifest_path, FIXTURE_DIR / "provenance.json")
+
+    def test_mapscene_emits_verified_provenance(self, tmp_path):
+        from forge3d.map_scene import (
+            LightingPreset,
+            MapScene,
+            OrbitCamera,
+            OutputSpec,
+            SceneRecipe,
+            TerrainSource,
+        )
+
+        image_path = tmp_path / "mapscene.png"
+        scene = MapScene(
+            SceneRecipe(
+                terrain=TerrainSource(
+                    data=_build_heightmap(160),
+                    crs="EPSG:32610",
+                    metadata={
+                        "asset_status": "fixture",
+                        "virtual_texture": {
+                            "enabled": True,
+                            "families": [
+                                {
+                                    "family": "albedo",
+                                    "virtual_size_px": [VIRTUAL_SIZE, VIRTUAL_SIZE],
+                                }
+                            ],
+                            "procedural_sources": True,
+                            "source_count": 4,
+                            "source_size": VIRTUAL_SIZE,
+                        },
+                    },
+                ),
+                camera=OrbitCamera(
+                    target=(0.0, 0.0, 0.0),
+                    distance=4.0,
+                    azimuth_deg=142.0,
+                    elevation_deg=58.0,
+                    fov_deg=50.0,
+                ),
+                lighting=LightingPreset(
+                    settings={
+                        "albedo_mode": "material",
+                        "colormap_strength": 0.0,
+                        "hue_variation_strength": 0.0,
+                        "material_slope_bias": 0.0,
+                    }
+                ),
+                output=OutputSpec(
+                    path=str(image_path), width=256, height=192, samples=1
+                ),
+            )
+        )
+        scene.render(
+            emit_provenance=True, provenance_signing_key=TEST_PRIVATE_KEY
+        )
+
+        source_map_path = image_path.with_name("mapscene.source_map.npy")
+        manifest_path = image_path.with_name("mapscene.provenance.json")
+        verified = subprocess.run(
+            [
+                sys.executable,
+                str(VERIFIER),
+                str(image_path),
+                str(source_map_path),
+                str(manifest_path),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert verified.returncode == 0, verified.stdout + verified.stderr
+        assert "verified: True" in verified.stdout
+        assert "unknown_source_ids" not in verified.stdout
+
+        tampered_source_map = np.load(source_map_path)
+        tampered_source_map.flat[0] ^= 1
+        tampered_source_map_path = tmp_path / "mapscene.tampered.source_map.npy"
+        np.save(tampered_source_map_path, tampered_source_map)
+        tampered = subprocess.run(
+            [
+                sys.executable,
+                str(VERIFIER),
+                str(image_path),
+                str(tampered_source_map_path),
+                str(manifest_path),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert tampered.returncode != 0
+        assert "verified: False" in tampered.stdout
+
+    def test_normal_settled_frame_skips_resident_feedback(
+        self, provenance_render_env
+    ):
+        renderer, material_set, ibl, heightmap = provenance_render_env
+        _register_sources(renderer)
+        params = _build_params(source_id=False)
+        # Render until streaming settles (no misses, nothing retained); the
+        # frame after that must not report resident pages as feedback.
+        settled = False
+        for _ in range(12):
+            renderer.render_with_aov(
+                material_set=material_set,
+                env_maps=ibl,
+                params=params,
+                heightmap=heightmap,
+            )
+            stats = renderer.get_material_vt_stats()
+            if stats["cache_misses"] == 0 and stats["retained_requests"] == 0:
+                settled = True
+                break
+        assert settled, f"VT streaming never settled: {stats}"
+        renderer.render_with_aov(
+            material_set=material_set,
+            env_maps=ibl,
+            params=params,
+            heightmap=heightmap,
+        )
+        stats = renderer.get_material_vt_stats()
+        assert stats["resident_pages"] > 0
+        assert stats["feedback_requests"] == 0
+
+    def test_seal_is_deterministic_across_renders(self, provenance_render_env):
+        rgba_a, _, _, source_map_a, tiles_a = self._render_triple(provenance_render_env)
+        manifest_a = json.loads(
+            bytes(
+                f3d.seal_provenance(
+                    source_map_a, tiles_a, TEST_PRIVATE_KEY, rgba_a.tobytes()
+                )
+            )
+        )
+        rgba_b, _, _, source_map_b, tiles_b = self._render_triple(provenance_render_env)
+        manifest_b = json.loads(
+            bytes(
+                f3d.seal_provenance(
+                    source_map_b, tiles_b, TEST_PRIVATE_KEY, rgba_b.tobytes()
+                )
+            )
+        )
+        assert manifest_a["merkle_root"] == manifest_b["merkle_root"]
+        assert manifest_a["signature"] == manifest_b["signature"]
+
+    def test_source_id_rejects_msaa(self, provenance_render_env):
+        renderer, material_set, ibl, heightmap = provenance_render_env
+        _register_sources(renderer)
+        config = make_terrain_params_config(
+            size_px=(128, 96),
+            render_scale=1.0,
+            terrain_span=8.0,
+            msaa_samples=4,
+            z_scale=1.6,
+            exposure=1.0,
+            domain=(0.0, 1.0),
+            albedo_mode="material",
+            colormap_strength=0.0,
+            camera_mode="mesh",
+            cam_radius=4.0,
+            pom=PomSettings(False, "Occlusion", 0.0, 1, 1, 0, False, False),
+            aov=AovSettings(enabled=True, albedo=False, normal=False, depth=False, source_id=True),
+        )
+        config.cam_target = [0.0, 0.0, 0.0]
+        config.vt = TerrainVTSettings(
+            enabled=True,
+            atlas_size=4096,
+            residency_budget_mb=192.0,
+            max_mip_levels=6,
+            layers=[VTLayerFamily(family="albedo", virtual_size_px=(VIRTUAL_SIZE, VIRTUAL_SIZE))],
+        )
+        params = f3d.TerrainRenderParams(config)
+        with pytest.raises(RuntimeError, match="msaa_samples=1"):
+            renderer.render_with_aov(
+                material_set=material_set,
+                env_maps=ibl,
+                params=params,
+                heightmap=heightmap,
+            )
