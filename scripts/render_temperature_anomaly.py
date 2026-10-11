@@ -91,9 +91,8 @@ PANEL_W = 430
 CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
 UPSAMPLE_FACTOR = 3  # suaviza la rejilla nativa de ERA5-Land (169x123) antes de renderizar
 
-# Firma del autor en el panel (pendiente: nombre y LinkedIn reales del usuario)
-SIGNATURE_NAME = "TU NOMBRE AQUI"
-SIGNATURE_LINKEDIN = "linkedin.com/in/tu-usuario"
+SIGNATURE_NAME = "Jonhatan Rivadeneira Pacheco"
+SIGNATURE_LINKEDIN = "linkedin.com/in/jonhatan-jose-rivadeneira-pacheco-192354130"
 
 
 def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
