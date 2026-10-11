@@ -65,11 +65,15 @@ ERA5 (Copernicus Climate Data Store).
   <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="800">
 </p>
 <p align="center">
-  <img src="docs/assets/colombia_temp_anomaly_202609.gif" alt="Animacion de anomalia de temperatura diaria en Colombia, septiembre 2026" width="320">
+  <video src="docs/assets/colombia_temp_anomaly_202609.mp4" width="320" controls loop muted>
+    Tu visor de Markdown no reproduce video embebido; abre
+    <a href="docs/assets/colombia_temp_anomaly_202609.mp4">colombia_temp_anomaly_202609.mp4</a> directamente,
+    o usa el GIF: <a href="docs/assets/colombia_temp_anomaly_202609.gif">colombia_temp_anomaly_202609.gif</a>.
+  </video>
 </p>
 
 ```bash
-pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio
+pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg
 
 # 1. Cuenta gratuita + API key en https://cds.climate.copernicus.eu/
 #    y aceptar la licencia de "ERA5 hourly/monthly single levels".

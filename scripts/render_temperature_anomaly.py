@@ -105,6 +105,24 @@ def render_grid(stack: np.ndarray, year: int, month: int, vmax: float) -> Path:
     return out_path
 
 
+def _render_frame(
+    data: np.ndarray, title: str, norm: TwoSlopeNorm, cmap, figsize=(5, 6), dpi=160
+) -> np.ndarray:
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi, facecolor="#0b0b0f")
+    ax.set_facecolor("#0b0b0f")
+    ax.axis("off")
+    im = ax.imshow(data, cmap=cmap, norm=norm)
+    ax.set_title(title, color="white", fontsize=13, pad=8)
+    cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.04)
+    cbar.set_label("Anomalia de temperatura (°C)", color="white", fontsize=9)
+    cbar.ax.xaxis.set_tick_params(color="white", labelcolor="white")
+    fig.tight_layout()
+    fig.canvas.draw()
+    frame = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    plt.close(fig)
+    return frame
+
+
 def render_gif(stack: np.ndarray, year: int, month: int, vmax: float) -> Path:
     import imageio.v2 as imageio
 
@@ -113,27 +131,52 @@ def render_gif(stack: np.ndarray, year: int, month: int, vmax: float) -> Path:
     cmap = plt.get_cmap("RdBu_r")
     month_name = MESES_ES[month]
 
-    frames = []
-    for i in range(n_days):
-        fig, ax = plt.subplots(figsize=(5, 6), facecolor="#0b0b0f")
-        ax.set_facecolor("#0b0b0f")
-        ax.axis("off")
-        im = ax.imshow(stack[i], cmap=cmap, norm=norm)
-        ax.set_title(
-            f"{i + 1:02d} de {month_name} {year}", color="white", fontsize=13, pad=8
-        )
-        cbar = fig.colorbar(im, ax=ax, orientation="horizontal", fraction=0.05, pad=0.04)
-        cbar.set_label("Anomalia de temperatura (°C)", color="white", fontsize=9)
-        cbar.ax.xaxis.set_tick_params(color="white", labelcolor="white")
-        fig.tight_layout()
-        fig.canvas.draw()
-        frame = np.asarray(fig.canvas.buffer_rgba())
-        frames.append(frame.copy())
-        plt.close(fig)
+    frames = [
+        _render_frame(stack[i], f"{i + 1:02d} de {month_name} {year}", norm, cmap)
+        for i in range(n_days)
+    ]
 
     out_path = OUT_DIR / f"colombia_temp_anomaly_{year:04d}{month:02d}.gif"
     imageio.mimsave(out_path, frames, duration=0.35, loop=0)
     print(f"[ok] gif guardado en {out_path}")
+    return out_path
+
+
+def render_video(
+    stack: np.ndarray, year: int, month: int, vmax: float,
+    fps: int = 24, steps_per_day: int = 10,
+) -> Path:
+    """Video MP4 con transicion suave dia a dia, al estilo del post de Popovic."""
+    import imageio.v2 as imageio
+
+    n_days = stack.shape[0]
+    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
+    cmap = plt.get_cmap("RdBu_r")
+    month_name = MESES_ES[month]
+
+    out_path = OUT_DIR / f"colombia_temp_anomaly_{year:04d}{month:02d}.mp4"
+    writer = imageio.get_writer(out_path, fps=fps, codec="libx264", quality=8)
+    try:
+        for day in range(n_days):
+            start = stack[day]
+            end = stack[day + 1] if day + 1 < n_days else stack[day]
+            for s in range(steps_per_day):
+                t = s / steps_per_day
+                blended = start * (1 - t) + end * t
+                frame = _render_frame(
+                    blended, f"{day + 1:02d} de {month_name} {year}", norm, cmap
+                )
+                writer.append_data(frame)
+        # mantener el ultimo dia un poco mas al final
+        last_frame = _render_frame(
+            stack[-1], f"{n_days:02d} de {month_name} {year}", norm, cmap
+        )
+        for _ in range(fps):
+            writer.append_data(last_frame)
+    finally:
+        writer.close()
+
+    print(f"[ok] video guardado en {out_path}")
     return out_path
 
 
@@ -156,6 +199,13 @@ def main() -> None:
         render_gif(stack, year, month, vmax)
     except ImportError:
         print("[info] imageio no instalado, se omite el GIF (pip install imageio)")
+    try:
+        render_video(stack, year, month, vmax)
+    except ImportError:
+        print(
+            "[info] imageio-ffmpeg no instalado, se omite el video "
+            "(pip install imageio-ffmpeg)"
+        )
 
 
 if __name__ == "__main__":
