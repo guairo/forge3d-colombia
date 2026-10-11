@@ -1,31 +1,26 @@
 """Renderiza la anomalia diaria de temperatura de Colombia (ERA5-Land) como
-un relieve 3D al estilo del video original de Milos Popovic sobre Europa
-(https://lnkd.in/p/ej6MgpQD, "A warmer shape of summer, day by day") — ese
-post usa forge3d por debajo (su enlace a "la herramienta" apunta al propio
-repositorio).
+un relieve 3D de "agujas" al estilo del video original de Milos Popovic
+sobre Europa (https://lnkd.in/p/ej6MgpQD, "A warmer shape of summer, day by
+day") — ese post usa forge3d por debajo (su enlace a "la herramienta"
+apunta al propio repositorio).
 
-Pipeline:
-  1. La propia anomalia (sin suavizar, para conservar el detalle de celda
-     de ERA5-Land ~9 km) maneja un TerrainSource neutro en forge3d.MapScene,
-     que se renderiza SOLO para capturar el sombreado 3D nativo (luz,
-     sombras, textura de relieve). Calido sube, frio se hunde.
-  2. El color es un colormap continuo construido a partir de la paleta
-     exacta muestreada del video original (azul grisaceo -> crema ->
-     naranja -> rojo), aplicado directamente sobre la anomalia (-9 a +9 C).
-  3. Se combinan con un blend multiplicativo suave (sombreado x color).
-  4. Se compone sobre un lienzo blanco con sombra proyectada y un panel
-     lateral editorial (titulo, fecha, media diaria, mini histograma,
-     leyenda, atribucion), igual que el original.
-
-forge3d.MapScene mezcla el color de un RasterOverlay clasificado con su
-propio tonemap de iluminacion (ver docs/guides/thematic_raster_styles.md),
-por eso el color final se compone aparte en vez de usar un overlay nativo.
-El motor tambien limita height_scale a +-65536 unidades (RuntimeError de
-`u_shading.clamp0` si se excede) — el efecto de "pelo/agujas" muy afilado
-del video original probablemente usa columnas discretas por celda en vez
-de una superficie continua interpolada; esa tecnica no esta expuesta en la
-API publica de forge3d usada aqui, asi que este render usa una superficie
-continua (menos afilada, mismo concepto de altura+color=anomalia).
+Pipeline (via el visor interactivo de forge3d, controlado por IPC, igual
+que examples/population_spike_worldpop/*.py):
+  1. La propia anomalia (celda a celda, sin suavizar) es la altura de un
+     GeoTIFF que se carga como terreno — calido sube, frio se hunde. La
+     resolucion nativa de ERA5-Land (~9 km) sin interpolar es lo que crea
+     la textura fina de "agujas" del video original.
+  2. El color es un overlay PNG con un colormap continuo muestreado pixel
+     a pixel de la paleta real del video (azul grisaceo -> crema ->
+     naranja -> rojo), cargado con ``preserve_colors=True`` para que el
+     motor lo componga DESPUES de la iluminacion 3D (sombras/AO) en vez de
+     teñirlo con el tonemap, como hace un ``RasterOverlay`` normal de
+     ``MapScene`` (ver docs/guides/thematic_raster_styles.md).
+  3. PBR con sombras pcss + ambient occlusion basado en altura (AO entre
+     agujas vecinas) es lo que da la profundidad/textura marcada.
+  4. El snapshot (ya con fondo blanco nativo) se compone con una sombra
+     proyectada sintetica y el panel lateral editorial (titulo, fecha,
+     media diaria, mini histograma, leyenda, atribucion, firma).
 
 Entrada: assets/era5/colombia_t2m_anomaly_<YYYYMM>.tif (una banda por dia,
 generado por scripts/fetch_era5_colombia.py con datos ERA5-Land).
@@ -41,18 +36,19 @@ Requiere una GPU compatible con WebGPU.
 from __future__ import annotations
 
 import sys
-from calendar import monthrange
 from datetime import date
 from pathlib import Path
 
-import forge3d as f3d
 import geopandas as gpd
 import numpy as np
 import rasterio
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from rasterio.mask import mask as rio_mask
-from scipy.ndimage import zoom as ndi_zoom
+
+REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT / "python"))
+import forge3d as f3d  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ERA5_DIR = REPO_ROOT / "assets" / "era5"
@@ -85,13 +81,16 @@ VRANGE = 5.0  # anomalia en +-5 C mapea a los extremos de la paleta (el mes
 # real ronda -4..+6.5 C; con +-9 los colores quedaban casi todos al centro)
 
 RENDER_PX = 1100
-HEIGHT_OFFSET = 5.0  # desplaza la altura a positivo (minimo observado ~-4.2 C)
-HEIGHT_SCALE_SAFETY = 0.92  # margen bajo el limite duro del motor (clamp +-65536)
-SHADE_LOW, SHADE_HIGH = 0.55, 1.70  # contraste de sombreado exagerado para notar el cambio dia a dia
-NEUTRAL_GRAY = 235
 PANEL_W = 430
 CANVAS_W, CANVAS_H = PANEL_W + RENDER_PX, RENDER_PX
-UPSAMPLE_FACTOR = 3  # suaviza la rejilla nativa de ERA5-Land (169x123) antes de renderizar
+
+# Camara / relieve del visor interactivo (ver examples/population_spike_worldpop)
+CAMERA_PHI = 78.0
+CAMERA_THETA = -60.0
+CAMERA_RADIUS = 480.0
+CAMERA_FOV = 32.0
+SUN_AZIMUTH, SUN_ELEVATION, SUN_INTENSITY, AMBIENT = 110.0, 35.0, 3.0, 0.18
+ZSCALE_PEAK_FRACTION = 0.55  # pico mas alto ~= esta fraccion del ancho de la rejilla
 
 SIGNATURE_NAME = "Jonhatan Rivadeneira Pacheco"
 SIGNATURE_LINKEDIN = "linkedin.com/in/jonhatan-jose-rivadeneira-pacheco-192354130"
@@ -124,55 +123,72 @@ def _load_masked_stack(tif_path: Path, boundary: gpd.GeoDataFrame) -> np.ndarray
         return np.stack(frames, axis=0)
 
 
-def _upsample_day(day: np.ndarray, mask_valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Suaviza la rejilla nativa de ERA5-Land con un upsample bicubico.
-
-    Evita el aspecto "en terrazas" tanto del relieve como del color al
-    escalar una rejilla de ~170x120 celdas hasta RENDER_PX.
-    """
-    filled = np.where(mask_valid, day, 0.0)
-    day_up = ndi_zoom(filled, UPSAMPLE_FACTOR, order=3)
-    mask_up = ndi_zoom(mask_valid.astype(np.float32), UPSAMPLE_FACTOR, order=1) > 0.5
-    return day_up, mask_up
+def _safe_zscale(stack: np.ndarray, grid_width: int) -> float:
+    """zscale tal que el pico mas alto del mes sea ~ZSCALE_PEAK_FRACTION del
+    ancho de la rejilla — mismo zscale para los 30 dias asi la escala
+    vertical es comparable entre tarjetas."""
+    max_abs = float(np.nanmax(np.abs(stack)))
+    return ZSCALE_PEAK_FRACTION * grid_width / max_abs
 
 
-def _render_shade(day_up: np.ndarray, mask_up: np.ndarray, height_scale: float, tmp_path: Path) -> np.ndarray:
-    """Relieve 3D (altura = anomalia) renderizado con el motor nativo de forge3d."""
-    height_src = np.where(mask_up, day_up + HEIGHT_OFFSET, 0.0).astype(np.float32)
-    neutral_style = f3d.RasterHeightSurfaceStyle(
-        height_scale, "C",
-        low_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
-        high_color=(NEUTRAL_GRAY, NEUTRAL_GRAY, NEUTRAL_GRAY, 255),
-    )
-    terrain = f3d.TerrainSource(
-        data=height_src, style=neutral_style, crs="EPSG:4326",
-        metadata={"source_id": "anomaly_relief"}, elevation_sampling_available=True,
-    )
-    camera = f3d.OrbitCamera(distance=2.3, azimuth_deg=-25, elevation_deg=46, fov_deg=32)
-    output = f3d.OutputSpec(width=RENDER_PX, height=RENDER_PX, format="png", path=str(tmp_path))
-    lighting = f3d.LightingPreset(name="daylight", sun_direction=(0.3, 0.9, 0.4), intensity=1.6)
-    scene = f3d.MapScene(terrain=terrain, layers=(), camera=camera, lighting=lighting, output=output)
-    scene.render(str(tmp_path))
-    return np.asarray(Image.open(tmp_path).convert("L"), dtype=np.float32)
+def _content_alpha(snapshot_rgb: np.ndarray, bg=(255, 255, 255), threshold: int = 6) -> np.ndarray:
+    """Mascara de 'no es el fondo blanco del visor' para recortar el mapa."""
+    diff = np.abs(snapshot_rgb.astype(np.int16) - np.array(bg, dtype=np.int16))
+    return (np.any(diff > threshold, axis=2) * 255).astype(np.uint8)
 
 
-def _render_map_rgba(day: np.ndarray, height_scale: float, tmp_path: Path) -> Image.Image:
+def _write_day_assets(day: np.ndarray, dem_path: Path, overlay_path: Path) -> None:
+    """Escribe el GeoTIFF de altura (= anomalia, con signo) y el overlay de
+    color para un dia, listos para cargar en el visor interactivo."""
     mask_valid = ~np.isnan(day)
-    day_up, mask_up = _upsample_day(day, mask_valid)
-    shade = _render_shade(day_up, mask_up, height_scale, tmp_path)
+    height_data = np.where(mask_valid, day, 0.0).astype(np.float32)
+    Image.fromarray(np.ascontiguousarray(height_data)).save(
+        str(dem_path), format="TIFF", compression="raw"
+    )
 
-    norm = np.clip((day_up + VRANGE) / (2 * VRANGE), 0.0, 1.0)
+    norm = np.clip((day + VRANGE) / (2 * VRANGE), 0.0, 1.0)
     color = (CMAP(norm)[..., :3] * 255).astype(np.uint8)
-    alpha = np.where(mask_up, 255, 0).astype(np.uint8)
+    alpha = np.where(mask_valid, 255, 0).astype(np.uint8)
+    Image.fromarray(np.dstack([color, alpha]), mode="RGBA").save(str(overlay_path))
 
-    color_img = np.asarray(Image.fromarray(color).resize((RENDER_PX, RENDER_PX), Image.BICUBIC))
-    alpha_img = np.asarray(Image.fromarray(alpha).resize((RENDER_PX, RENDER_PX), Image.BILINEAR))
 
-    shade_norm = np.clip(shade / NEUTRAL_GRAY, SHADE_LOW, SHADE_HIGH)
-    blended = np.clip(color_img.astype(np.float32) * shade_norm[..., None], 0, 255).astype(np.uint8)
+def _render_map_rgba(
+    viewer, day: np.ndarray, zscale: float,
+    dem_path: Path, overlay_path: Path, snap_path: Path,
+) -> Image.Image:
+    """Carga el relieve+overlay de un dia en el visor ya abierto y toma el
+    snapshot; devuelve el recorte RGBA (alpha = contenido, no fondo)."""
+    _write_day_assets(day, dem_path, overlay_path)
 
-    rgba = np.dstack([blended, alpha_img])
-    return Image.fromarray(rgba, mode="RGBA")
+    viewer.load_terrain(str(dem_path))
+    viewer.send_ipc({
+        "cmd": "set_terrain",
+        "phi": CAMERA_PHI, "theta": CAMERA_THETA, "radius": CAMERA_RADIUS, "fov": CAMERA_FOV,
+        "zscale": zscale,
+        "sun_azimuth": SUN_AZIMUTH, "sun_elevation": SUN_ELEVATION,
+        "sun_intensity": SUN_INTENSITY, "ambient": AMBIENT,
+        "background": [1.0, 1.0, 1.0],
+    })
+    viewer.send_ipc({
+        "cmd": "set_terrain_pbr",
+        "enabled": True, "exposure": 1.1,
+        "shadow_technique": "pcss", "shadow_map_res": 4096, "msaa": 4,
+        "normal_strength": 0.65,
+        "height_ao": {
+            "enabled": True, "directions": 6, "steps": 14,
+            "max_distance": 60.0, "strength": 0.6, "resolution_scale": 0.5,
+        },
+    })
+    viewer.load_overlay(name="anomaly", path=str(overlay_path.resolve()), opacity=1.0, preserve_colors=True)
+    viewer.send_ipc({"cmd": "set_overlay_solid", "solid": False})
+
+    if snap_path.exists():
+        snap_path.unlink()
+    viewer.snapshot(str(snap_path), width=RENDER_PX, height=RENDER_PX)
+
+    snap_rgb = np.array(Image.open(snap_path).convert("RGB"))
+    alpha = _content_alpha(snap_rgb)
+    return Image.fromarray(np.dstack([snap_rgb, alpha]), mode="RGBA")
 
 
 def _compose_on_canvas(map_rgba: Image.Image) -> Image.Image:
@@ -289,27 +305,32 @@ def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, la
     return canvas
 
 
-def _safe_height_scale(stack: np.ndarray) -> float:
-    """Mayor escala de altura que no exceda el clamp duro (+-65536) del motor,
-    dado el rango de anomalia real de este mes (mas exageracion = mas facil
-    notar el cambio dia a dia)."""
-    max_abs = float(np.nanmax(np.abs(stack)))
-    max_height_src = max_abs + HEIGHT_OFFSET
-    return HEIGHT_SCALE_SAFETY * 65536.0 / max_height_src
-
-
 def render_all_days(stack: np.ndarray) -> tuple[list[Image.Image], list[float]]:
-    height_scale = _safe_height_scale(stack)
-    print(f"[info] height_scale calibrado a {height_scale:.0f} para este mes")
-    tmp_path = OUT_DIR / "_tmp_shade.png"
+    zscale = _safe_zscale(stack, grid_width=stack.shape[2])
+    print(f"[info] zscale calibrado a {zscale:.1f} para este mes")
+
+    dem_path = OUT_DIR / "_tmp_dem.tif"
+    overlay_path = OUT_DIR / "_tmp_overlay.png"
+    snap_path = OUT_DIR / "_tmp_snap.png"
+
     maps, land_means = [], []
-    for i in range(stack.shape[0]):
-        day = stack[i]
-        maps.append(_render_map_rgba(day, height_scale, tmp_path))
-        land_means.append(float(np.nanmean(day)))
-        print(f"[render] dia {i + 1:02d}/{stack.shape[0]} listo")
-    tmp_path.unlink(missing_ok=True)
+    with _open_viewer_with_first_day(stack[0], dem_path, overlay_path) as viewer:
+        for i in range(stack.shape[0]):
+            day = stack[i]
+            maps.append(_render_map_rgba(viewer, day, zscale, dem_path, overlay_path, snap_path))
+            land_means.append(float(np.nanmean(day)))
+            print(f"[render] dia {i + 1:02d}/{stack.shape[0]} listo")
+
+    for p in (dem_path, overlay_path, snap_path):
+        p.unlink(missing_ok=True)
     return maps, land_means
+
+
+def _open_viewer_with_first_day(first_day: np.ndarray, dem_path: Path, overlay_path: Path):
+    """Abre el visor interactivo con el terreno del primer dia ya cargado
+    (open_viewer_async necesita un terrain_path valido al arrancar)."""
+    _write_day_assets(first_day, dem_path, overlay_path)
+    return f3d.open_viewer_async(terrain_path=dem_path, width=RENDER_PX, height=RENDER_PX, timeout=60)
 
 
 def render_grid(maps: list[Image.Image], land_means: list[float], year: int, month: int) -> Path:

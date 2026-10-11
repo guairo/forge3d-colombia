@@ -89,23 +89,20 @@ del mes: la temperatura media diaria a 2 m frente a la normal climatologica
 1991-2020, con datos ERA5-Land (~9 km) reales.
 
 La altura y el color muestran la misma anomalia con signo — calido sube,
-frio se hunde, no es elevacion real del terreno. El relieve se renderiza
-con el motor de iluminacion 3D nativo de forge3d (`MapScene` +
-`TerrainSource`, luz y sombra reales); el color es un colormap continuo
-muestreado directamente de la paleta del video original, combinado con el
-sombreado via blend multiplicativo (el tonemap de iluminacion de
-`MapScene` atenua cualquier color de overlay nativo — ver
-[`docs/guides/thematic_raster_styles.md`](docs/guides/thematic_raster_styles.md)
-— asi que el color final se compone aparte). El panel editorial (titulo,
-fecha, media diaria, mini histograma, leyenda) se compone con Pillow sobre
-fondo blanco con sombra proyectada, igual que el original.
-
-> El efecto de "agujas" muy afiladas del video original probablemente usa
-> columnas discretas por celda en vez de una superficie continua
-> interpolada; esa tecnica no esta expuesta en la API publica de forge3d
-> usada aqui (que ademas limita `height_scale` a ±65536 unidades), asi que
-> este render usa una superficie continua con el mismo concepto de
-> altura+color=anomalia.
+frio se hunde, no es elevacion real del terreno. El relieve es la propia
+rejilla de ERA5-Land sin suavizar (~9 km, celda a celda), cargada como
+terreno en el visor interactivo de forge3d y controlada por IPC — el mismo
+mecanismo que usan los ejemplos de
+[`population_spike_worldpop`](examples/population_spike_worldpop). El color
+es un overlay PNG con un colormap continuo muestreado pixel a pixel de la
+paleta del video original, cargado con `preserve_colors=True` para que el
+motor lo componga *despues* de la iluminacion 3D en vez de teñirlo con el
+tonemap (lo que pasa con un `RasterOverlay` normal de `MapScene` — ver
+[`docs/guides/thematic_raster_styles.md`](docs/guides/thematic_raster_styles.md)).
+PBR con sombras `pcss` y ambient occlusion basado en altura (entre "agujas"
+vecinas) es lo que le da la textura y profundidad marcadas. El panel
+editorial (titulo, fecha, media diaria, mini histograma, leyenda, firma) se
+compone con Pillow sobre el snapshot, con una sombra proyectada sintetica.
 
 <p align="center">
   <img src="docs/assets/colombia_temp_anomaly_202609_grid.png" alt="Mosaico de anomalia de temperatura diaria en Colombia, septiembre 2026" width="820">
@@ -121,11 +118,11 @@ fondo blanco con sombra proyectada, igual que el original.
 
 ### Reproducir o generar otro mes
 
-Requiere una GPU compatible con WebGPU (el relieve se renderiza con
-`forge3d.MapScene`, igual que el resto de ejemplos).
+Requiere una GPU compatible con WebGPU (el relieve se renderiza con el
+visor interactivo de forge3d, igual que el resto de ejemplos).
 
 ```bash
-pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg scipy
+pip install cdsapi xarray netCDF4 rasterio geopandas matplotlib imageio imageio-ffmpeg
 
 # 1. Cuenta gratuita + API key en https://cds.climate.copernicus.eu/
 #    y aceptar la licencia de "ERA5-Land hourly data" y
