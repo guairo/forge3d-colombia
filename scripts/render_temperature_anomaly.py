@@ -96,11 +96,42 @@ SIGNATURE_NAME = "Jonhatan Rivadeneira Pacheco"
 SIGNATURE_LINKEDIN = "linkedin.com/in/jonhatan-jose-rivadeneira-pacheco-192354130"
 
 
-def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
+def _font_candidates(name: str) -> list[str]:
+    """Rutas candidatas para una fuente logica (``arial.ttf`` /
+    ``arialbd.ttf``), en orden de preferencia. En Windows usa Arial real
+    (salida identica a la del autor); fuera de Windows cae a DejaVu (que
+    ya viene con matplotlib, dependencia del pipeline) o Liberation, para
+    que el panel siga legible en Linux/Mac en vez de la fuente bitmap
+    minuscula de ``ImageFont.load_default()``."""
+    bold = "bd" in name.lower() or "bold" in name.lower()
+    candidates = [str(FONT_DIR / name)]  # Windows (Arial), primera opcion
     try:
-        return ImageFont.truetype(str(FONT_DIR / name), size)
-    except OSError:
-        return ImageFont.load_default()
+        import matplotlib
+
+        ttf = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+        candidates.append(str(ttf / ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")))
+    except Exception:
+        pass
+    candidates += [
+        # macOS
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        # Linux (dejavu / liberation)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
+        else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    return candidates
+
+
+def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
+    for path in _font_candidates(name):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def _target_month() -> tuple[int, int]:
@@ -128,6 +159,9 @@ def _safe_zscale(stack: np.ndarray, grid_width: int) -> float:
     ancho de la rejilla — mismo zscale para los 30 dias asi la escala
     vertical es comparable entre tarjetas."""
     max_abs = float(np.nanmax(np.abs(stack)))
+    if not np.isfinite(max_abs) or max_abs <= 0.0:
+        # mes sin variacion (o stack todo NaN): escala neutra, evita div/0
+        return float(grid_width)
     return ZSCALE_PEAK_FRACTION * grid_width / max_abs
 
 
@@ -305,6 +339,30 @@ def _compose_card(map_rgba: Image.Image, year: int, month: int, day_idx: int, la
     return canvas
 
 
+def _render_signature(zscale: float, n_days: int) -> str:
+    """Huella de los parametros que quedan *horneados* en el snapshot del
+    mapa (altura/overlay/iluminacion/camara), para invalidar la cache si
+    cambian. El panel editorial se compone DESPUES del cache, asi que sus
+    fuentes/diseño quedan fuera a proposito: reajustar el panel sigue sin
+    forzar un re-render del motor."""
+    import hashlib
+    import json
+
+    payload = {
+        "n_days": n_days,
+        "vrange": VRANGE,
+        "anchor_pos": ANCHOR_POS,
+        "anchor_rgb": ANCHOR_RGB,
+        "render_px": RENDER_PX,
+        "zscale": round(zscale, 4),
+        "zscale_peak": ZSCALE_PEAK_FRACTION,
+        "camera": [CAMERA_PHI, CAMERA_THETA, CAMERA_RADIUS, CAMERA_FOV],
+        "sun": [SUN_AZIMUTH, SUN_ELEVATION, SUN_INTENSITY, AMBIENT],
+    }
+    blob = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()[:12]
+
+
 def render_all_days(stack: np.ndarray, year: int, month: int, use_cache: bool = True) -> tuple[list[Image.Image], list[float]]:
     """Renderiza (o recupera de cache) el snapshot recortado de cada dia.
 
@@ -312,20 +370,37 @@ def render_all_days(stack: np.ndarray, year: int, month: int, use_cache: bool = 
     es la parte lenta del pipeline; cachear los PNG ya compuestos en
     assets/era5/_frames_cache/<YYYYMM>/ permite reajustar el ritmo del
     video/gif o el diseño del panel sin volver a tocar el motor.
+
+    La cache se invalida sola si cambian los parametros que afectan el
+    snapshot del mapa (VRANGE, paleta, camara, iluminacion, zscale): se
+    guarda su huella en ``render_sig.txt`` y solo se reutiliza si coincide,
+    para no servir colores/relieve viejos en silencio.
     """
     n_days = stack.shape[0]
     cache_dir = ERA5_DIR / "_frames_cache" / f"{year:04d}{month:02d}"
     cache_files = [cache_dir / f"day_{i + 1:02d}.png" for i in range(n_days)]
     means_path = cache_dir / "land_means.json"
+    sig_path = cache_dir / "render_sig.txt"
 
-    if use_cache and means_path.exists() and all(p.exists() for p in cache_files):
+    zscale = _safe_zscale(stack, grid_width=stack.shape[2])
+    signature = _render_signature(zscale, n_days)
+
+    cache_valid = (
+        use_cache
+        and means_path.exists()
+        and sig_path.exists()
+        and sig_path.read_text().strip() == signature
+        and all(p.exists() for p in cache_files)
+    )
+    if cache_valid:
         import json
         maps = [Image.open(p).convert("RGBA") for p in cache_files]
         land_means = json.loads(means_path.read_text())
         print(f"[info] usando cache de renders en {cache_dir}")
         return maps, land_means
+    if use_cache and sig_path.exists() and sig_path.read_text().strip() != signature:
+        print("[info] parametros de render cambiaron: regenerando (cache invalidada)")
 
-    zscale = _safe_zscale(stack, grid_width=stack.shape[2])
     print(f"[info] zscale calibrado a {zscale:.1f} para este mes")
 
     dem_path = OUT_DIR / "_tmp_dem.tif"
@@ -345,6 +420,7 @@ def render_all_days(stack: np.ndarray, year: int, month: int, use_cache: bool = 
 
     import json
     means_path.write_text(json.dumps(land_means))
+    sig_path.write_text(signature)
 
     for p in (dem_path, overlay_path, snap_path):
         p.unlink(missing_ok=True)

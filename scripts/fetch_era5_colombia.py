@@ -157,8 +157,15 @@ def compute_daily_anomalies(daily_path: Path, clim_path: Path, year: int, month:
     lon = anomaly["longitude"].values
     n_days = anomaly.sizes[time_dim]
 
+    # lat/lon de ERA5 son centros de celda; from_bounds espera los bordes
+    # externos del raster, asi que se extiende medio paso en cada lado para
+    # no dejar el GeoTIFF corrido ~medio pixel (~4.5 km) respecto al grid real.
+    dx = (float(lon.max()) - float(lon.min())) / (len(lon) - 1) if len(lon) > 1 else 0.0
+    dy = (float(lat.max()) - float(lat.min())) / (len(lat) - 1) if len(lat) > 1 else 0.0
     transform = from_bounds(
-        lon.min(), lat.min(), lon.max(), lat.max(), len(lon), len(lat)
+        float(lon.min()) - dx / 2, float(lat.min()) - dy / 2,
+        float(lon.max()) + dx / 2, float(lat.max()) + dy / 2,
+        len(lon), len(lat),
     )
 
     out_path = DATA_DIR / f"colombia_t2m_anomaly_{year:04d}{month:02d}.tif"
